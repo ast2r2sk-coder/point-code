@@ -1,0 +1,75 @@
+{
+  "name": "point-code",
+  "displayName": "Point Code",
+  "description": "Click a local web UI element to inspect components & CSS, live-edit design tokens, and save back to source. Works with React, Vue, Svelte, Next.js, and Tailwind.",
+  "version": "0.4.2",
+  "publisher": "personal-tools",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other", "Visualization"],
+  "keywords": [
+    "inspect",
+    "inspector",
+    "devtools",
+    "click to source",
+    "css",
+    "cascade",
+    "tailwind",
+    "design tokens",
+    "react",
+    "vue",
+    "svelte",
+    "nextjs",
+    "cursor",
+    "visual editor",
+    "live preview",
+    "hmr",
+    "frontend"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ast2r2sk-coder/point-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ast2r2sk-coder/point-code/issues"
+  },
+  "homepage": "https://github.com/ast2r2sk-coder/point-code#readme",
+  "main": "./extension.js",
+  "extensionKind": ["ui"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": false
+  },
+  "activationEvents": ["onCommand:pointCode.start"],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "python package-vsix.py"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pointCode",
+          "title": "Point Code",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "pointCode": [
+        {
+          "type": "webview",
+          "id": "pointCode.inspector",
+          "name": "Element Inspector"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "pointCode.start", "title": "Point Code: Start / Open Preview" },
+      { "command": "pointCode.copyProxyUrl", "title": "Point Code: Copy Proxy URL" },
+      { "command": "pointCode.copyScript", "title": "Point Code: Copy Connection Script" },
+      { "command": "pointCode.styles", "title": "Point Code: Find Styles for Selected Element" },
+      { "command": "pointCode.stop", "title": "Point Code: Stop" }
+    ]
+  }
+}
