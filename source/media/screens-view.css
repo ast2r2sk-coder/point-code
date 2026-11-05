@@ -1,0 +1,47 @@
+*{box-sizing:border-box}
+html,body{height:100%}
+/* Chrome follows the VS Code theme; only the canvas stays dark so screens read like artboards. */
+body{margin:0;padding:0;font:13px var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
+#root{min-height:100%;padding:16px 20px 40px}
+[hidden]{display:none!important}
+.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:4px}
+.title{font-size:18px;font-weight:650;letter-spacing:-.02em}
+.hint,.empty,.warn{opacity:.8;line-height:1.5;margin:4px 0 12px;max-width:760px}
+.warn{color:var(--vscode-editorWarning-foreground,#e2a336);opacity:1}
+.muted{opacity:.7;margin-top:6px}
+.devices,.actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+.group{font-size:11px;opacity:.6;margin-right:2px}
+.sep{width:1px;height:16px;background:var(--vscode-widget-border,#8884);margin:0 2px}
+.devices .sep:first-of-type{display:none}
+button{font:inherit;cursor:pointer;border:1px solid var(--vscode-widget-border,#8884);background:var(--vscode-editorWidget-background);color:inherit;border-radius:6px;padding:5px 10px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--vscode-focusBorder);outline-offset:1px}
+.chip{border-radius:999px;font-size:12px;padding:4px 10px}
+.chip.on,.primary{background:var(--vscode-button-background,#0e639c);color:var(--vscode-button-foreground,#fff);border-color:transparent}
+.primary:disabled{opacity:.4;cursor:default}
+.ghost,.link{background:transparent}
+.zoom{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85;margin-left:8px}
+.zoom input{width:120px}
+.canvas{display:flex;flex-wrap:wrap;gap:28px 32px;align-items:flex-start;padding:20px 16px 48px;min-height:60vh;color:#e8e8e8;background:
+  linear-gradient(#2a2a2a 1px,transparent 1px) 0 0/24px 24px,
+  linear-gradient(90deg,#2a2a2a 1px,transparent 1px) 0 0/24px 24px,
+  #181818;border-radius:12px;border:1px solid #ffffff10}
+.canvas button{border-color:#ffffff22;background:#2a2a2a;color:#e8e8e8}
+.canvas .primary{background:var(--vscode-button-background,#0e639c);color:var(--vscode-button-foreground,#fff)}
+.canvas .link{background:transparent}
+.frame{display:flex;flex-direction:column;gap:6px;max-width:100%}
+.frame.kind-page{cursor:pointer}
+.frame.selected .frame-artboard,.frame.selected .frame-empty{outline:2px solid #4ea1ff;outline-offset:3px}
+.frame-label{display:flex;gap:6px;align-items:center;font-size:12px}
+.frame-label .name{opacity:.9;word-break:break-all}
+.badge{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid #ffffff28;opacity:.85}
+.kind-modal .badge,.kind-toast .badge,.kind-drawer .badge{color:#f0a35a}
+.frame-artboard{overflow:hidden;background:#fff;border-radius:8px;box-shadow:0 12px 40px #0008;border:1px solid #0006}
+.frame-iframe{border:0;display:block;transform-origin:0 0;pointer-events:none;background:#fff}
+.frame-empty{min-width:200px;max-width:320px;min-height:120px;padding:16px;border-radius:8px;background:#242424;border:1px dashed #ffffff30;font-size:12px}
+.frame-empty-title{margin-bottom:8px;opacity:.85}
+.params{display:flex;flex-direction:column;gap:6px}
+.param{display:flex;gap:6px;align-items:center}
+.param code{min-width:48px;opacity:.8}
+.param input{flex:1;min-width:0;padding:4px 6px;border-radius:4px;border:1px solid #ffffff30;background:#1b1b1b;color:inherit;font:inherit}
+.frame-meta,.frame-actions{font-size:11px;opacity:.7;display:flex;gap:4px;flex-wrap:wrap}
+.link{font-size:11px;padding:2px 6px}

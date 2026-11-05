@@ -1,0 +1,48 @@
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;padding:0;font:13px var(--vscode-font-family);color:var(--vscode-foreground);background:var(--vscode-editor-background)}
+#root{max-width:1100px;margin:0 auto;padding:24px 28px 80px}
+.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:8px;flex-wrap:wrap}
+.eyebrow{margin:0;font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.55}
+h1{margin:4px 0 0;font-size:32px;letter-spacing:-.03em;font-weight:700}
+.lede{opacity:.75;line-height:1.55;max-width:640px;margin:0 0 18px}
+.hero-actions,.toc{display:flex;flex-wrap:wrap;gap:6px}
+.toc{margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--vscode-panel-border,#8884)}
+button{font:inherit;cursor:pointer;border:1px solid var(--vscode-widget-border,#8884);background:var(--vscode-editorWidget-background);color:inherit;border-radius:8px;padding:6px 12px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--vscode-focusBorder);outline-offset:1px}
+.toc-btn.on,.save{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-color:transparent}
+.ghost,.link{background:transparent}
+.block{margin:0 0 36px}
+.block h2{margin:0 0 6px;font-size:20px;letter-spacing:-.02em}
+.sub,.empty{opacity:.65;margin:0 0 14px;line-height:1.45}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.swatch{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-widget-border,#8884);border-radius:12px;overflow:hidden;box-shadow:0 1px 0 #00000008}
+.swatch.dirty,.trow.dirty,.specimen.dirty{outline:2px solid var(--vscode-charts-yellow,#c9a227)}
+.face{height:88px;border-bottom:1px solid var(--vscode-widget-border,#8884)}
+.swatch code,.trow code,.comp-path{display:block;padding:8px 10px 0;font-family:var(--vscode-editor-font-family);font-size:11px;word-break:break-all}
+.swatch .row{display:flex;gap:6px;padding:8px 10px 10px;align-items:center}
+.swatch input[type=text],.specimen input,.trow input{flex:1;min-width:0;padding:5px 8px;border:1px solid var(--vscode-input-border,#8884);border-radius:6px;background:var(--vscode-input-background);color:var(--vscode-input-foreground,inherit);font:inherit}
+.swatch input[type=color]{width:28px;height:28px;padding:0;border:0;background:transparent}
+.specimens{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:14px}
+.specimen{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-widget-border,#8884);border-radius:12px;padding:12px}
+.sample{font-size:28px;line-height:1.25;margin:10px 0;letter-spacing:-.02em}
+.token-list{display:flex;flex-direction:column;gap:8px}
+.trow{display:grid;grid-template-columns:minmax(120px,1fr) 48px minmax(100px,1fr);gap:10px;align-items:center;background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-widget-border,#8884);border-radius:10px;padding:8px 10px}
+.trow:has(code + input){grid-template-columns:minmax(140px,1fr) minmax(120px,1fr)}
+.space-bar{height:10px;background:var(--vscode-foreground);border-radius:999px;min-width:4px;max-width:120px}
+.comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.comp{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-widget-border,#8884);border-radius:12px;padding:14px}
+.comp-name{font-weight:650;font-size:15px;margin-bottom:4px}
+.comp .link{margin-top:8px}
+.foot{position:sticky;bottom:0;display:flex;gap:10px;align-items:center;padding:12px 0;margin-top:24px;background:var(--vscode-editor-background);border-top:1px solid var(--vscode-panel-border,#8884)}
+.status{flex:1;min-height:1.2em}
+.status.saved{color:var(--vscode-testing-iconPassed,#1b7f3a)}
+.status.error,.status.warn{color:var(--vscode-errorForeground,#b42318)}
+.status.preview{color:var(--vscode-charts-yellow,#9a6700)}
+.save:disabled{opacity:.4;cursor:default}
+.link{font-size:11px;padding:2px 6px}
+@media (max-width:700px){
+  #root{padding:16px}
+  h1{font-size:24px}
+  .trow{grid-template-columns:1fr}
+}

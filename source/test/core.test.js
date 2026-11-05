@@ -90,3 +90,26 @@ test('common utility classes are demoted',()=>{
   const lines=Array.from({length:20},(_,i)=>({text:'<div className="flex items-center">',line:i+1})).concat({text:'<div className="flex card-header">',line:99});
   const ranked=rank(lines,el,false);assert.equal(ranked[0].line,99);assert.ok(ranked.every(e=>e.line===99||e.score<ranked[0].score));
 });
+const {setVariableIn,diffRange,serial}=require('../core');
+test('token save picks the theme rule (light/dark duplicates)',()=>{
+  const css=':root {\n  --primary: #111;\n}\n.dark {\n  --primary: #eee;\n}\n';
+  assert.equal(setVariable(css,'--primary','#f00'),null,'ambiguous by itself');
+  const base=setVariableIn(css,'--primary','#f00');
+  assert.equal(base.text,':root {\n  --primary: #f00;\n}\n.dark {\n  --primary: #eee;\n}\n');assert.equal(base.selector,':root');assert.equal(base.line,2);
+  assert.equal(setVariableIn(css,'--primary','#0f0','.dark').text,':root {\n  --primary: #111;\n}\n.dark {\n  --primary: #0f0;\n}\n');
+  const tw='@theme inline {\n  --color-brand: red;\n}\n.dark { --color-brand: blue; }\n';
+  assert.equal(setVariableIn(tw,'--color-brand','green',':root, :host').text,'@theme inline {\n  --color-brand: green;\n}\n.dark { --color-brand: blue; }\n','Tailwind v4 compiled selector maps to @theme');
+  assert.equal(setVariableIn('.a{--x:1}.b{--x:2}','--x','3'),null,'still refuses to guess between unrelated rules');
+});
+test('minimal edit range',()=>{
+  assert.deepEqual(diffRange('a { color: red; }','a { color: blue; }'),{start:11,end:14,text:'blue'});
+  assert.deepEqual(diffRange('same','same'),{start:4,end:4,text:''});
+  const a='x\n.btn{padding:1px}\n',b='x\n.btn{padding:1px;color:red}\n',d=diffRange(a,b);
+  assert.equal(a.slice(0,d.start)+d.text+a.slice(d.end),b);
+});
+test('serial saves do not overwrite each other',async()=>{
+  let file='.a{}';const run=serial();const read=async()=>{await new Promise(r=>setTimeout(r,5));return file;};
+  const edit=add=>run(async()=>{const t=await read();await new Promise(r=>setTimeout(r,5));file=t.replace('}',add+'}');});
+  await Promise.all([edit('color:red;'),edit('padding:0;'),run(async()=>{throw Error('x');}).catch(()=>{}),edit('margin:0;')]);
+  assert.equal(file,'.a{color:red;padding:0;margin:0;}');
+});

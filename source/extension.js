@@ -7,9 +7,12 @@ const fs = require('fs/promises');
 const path = require('path');
 const {EXCLUDE,localUrl,originAliases,sourcePath,safeSource,scoreLine,rank} = require('./core');
 const {createInspector} = require('./inspector');
+const {createPalette} = require('./palette');
+const {createScreens} = require('./screens');
+const {DEVICES} = require('./devices');
 const PREFIX = '/__point_code__/';
 const STATE = 'pointCode.session';
-let session, panel, selected, generation = 0, pickCancel, inspector;
+let session, panel, selected, generation = 0, pickCancel, inspector, palette, screens, pendingFocus;
 const decoder = new TextDecoder();
 const escape = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const readLines = async uri => decoder.decode(await vscode.workspace.fs.readFile(uri)).split(/\r?\n/);
@@ -141,17 +144,38 @@ function handle(s, req, res) {
     req.on('close',()=>{clearInterval(ping);s.live.delete(res);});
     return;
   }
+  if((endpoint.pathname===PREFIX+'palette' || endpoint.pathname===PREFIX+'screens') && req.method==='POST' && origin) {
+    let body='';req.on('data',chunk=>{body+=chunk;if(body.length>600000) req.destroy();});
+    req.on('end',()=>{try {
+      const data=JSON.parse(body);
+      if(endpoint.pathname===PREFIX+'palette') {
+        if(!Array.isArray(data.tokens) || data.tokens.length>250) throw Error();
+        palette?.update(data.tokens);
+      } else {
+        if(data.layers!=null && !Array.isArray(data.layers)) throw Error();
+        screens?.setCaptures(typeof data.doc==='string'?data.doc:null,data.layers||[]);
+      }
+      res.writeHead(204);res.end();
+    }catch {res.writeHead(400);res.end();}});
+    return;
+  }
   if(endpoint.pathname!==PREFIX+'select' || req.method!=='POST' || !origin) {res.writeHead(403);return res.end();}
   let body='';req.on('data',chunk=>{body+=chunk;if(body.length>600000) req.destroy();});
   req.on('end',()=>{try {
     const el=JSON.parse(body);
     if(typeof el.tag!=='string' || typeof el.text!=='string' || (el.ownText!=null && typeof el.ownText!=='string') || (el.inspect!=null && typeof el.inspect!=='object') || !Array.isArray(el.classes) || el.classes.length>100 || el.classes.some(c=>typeof c!=='string') || (el.id!=null && typeof el.id!=='string')) throw Error();
     res.writeHead(204);res.end();void handleSelection(el);
+    if(Array.isArray(el.inspect?.tokens)) palette?.update(el.inspect.tokens);
   }catch {res.writeHead(400);res.end();}});
 }
 const pageUrl = s => s.base+s.target.pathname+s.target.search+s.target.hash;
 const scriptTag = s => '<script src="'+s.base+PREFIX+'picker.js?token='+s.token+'"></script>';
+// A running session just reopens its preview; changing the dev server address is a separate command.
 async function start(context) {
+  if(session) return openPreview(session);
+  return connect(context);
+}
+async function connect(context) {
   if(!vscode.workspace.isTrusted || !vscode.workspace.workspaceFolders) return vscode.window.showErrorMessage('먼저 신뢰할 수 있는 로컬 프로젝트 폴더를 열어주세요.');
   if(vscode.env.remoteName) return vscode.window.showErrorMessage('Point Code는 로컬 Cursor만 지원합니다. SSH/WSL/컨테이너 환경은 지원하지 않습니다.');
   const saved = context.workspaceState.get(STATE)||{};
@@ -167,20 +191,128 @@ async function start(context) {
   Object.assign(s,{server,base:'http://127.0.0.1:'+port,hosts:new Set(['127.0.0.1:'+port,'localhost:'+port]),origins:new Set([...originAliases(target.origin),'http://127.0.0.1:'+port,'http://localhost:'+port])});
   await context.workspaceState.update(STATE,{port,token:s.token,url:target.href});
   session = s;
-  panel = vscode.window.createWebviewPanel('pointCode','Point Code',vscode.ViewColumn.One,{enableScripts:true,retainContextWhenHidden:true,localResourceRoots:[]});
-  const nonce = crypto.randomBytes(16).toString('hex');
-  panel.webview.html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${escape(s.base)}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>body{padding:0;margin:0;font:13px system-ui;background:var(--vscode-editor-background);color:var(--vscode-editor-foreground)}header{padding:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:7px 12px;cursor:pointer}p{padding:0 12px;font-size:12px;opacity:.8}iframe{width:100%;height:calc(100vh - 112px);border:0;background:white}</style></head><body><header><strong>Point Code</strong><button id="url">프록시 주소 복사</button><button id="copy">스크립트 태그 복사</button><button id="reload">새로고침</button><button id="styles">CSS 후보</button></header><p>${escape(pageUrl(s))} → ${escape(target.href)} · 프로젝트 수정 없이 연결됩니다. 하단 ‘요소 선택’ 또는 Alt+Shift+P</p><iframe src="${escape(pageUrl(s))}" title="개발 화면" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"></iframe><script nonce="${nonce}">const api=acquireVsCodeApi();for(const id of ['url','copy','styles'])document.getElementById(id).onclick=()=>api.postMessage({type:id});document.getElementById('reload').onclick=()=>{const f=document.querySelector('iframe');f.src=f.src;};</script></body></html>`;
-  panel.webview.onDidReceiveMessage(m=>{if(m.type==='url') void copyProxyUrl();if(m.type==='copy') void copyScript();if(m.type==='styles'&&selected) void candidates(selected,true);});
-  const own = panel; own.onDidDispose(()=>{if(panel===own) panel=undefined;});
+  screens?.setBase(s.base);
+  void screens?.refresh();
+  void palette?.refresh();
+  openPreview(s);
   await vscode.env.clipboard.writeText(pageUrl(s));
-  const moved = saved.port && saved.port!==port ? ` 이전 포트(${saved.port})가 사용 중이라 ${port}로 바뀌었습니다. 스크립트 태그를 쓰고 있다면 다시 복사하세요.` : '';
-  void vscode.window.showInformationMessage('프록시 주소를 복사했습니다: '+pageUrl(s)+' — Cursor 브라우저에서 이 주소를 열면 됩니다.'+moved,'스크립트 태그 복사').then(a=>{if(a) void copyScript();});
+  const moved = saved.port && saved.port!==port ? ` 이전 포트(${saved.port})가 사용 중이라 ${port}로 바뀌었습니다.` : '';
+  void vscode.window.showInformationMessage('미리보기가 열렸습니다. 화면 아래 ‘요소 선택’으로 고칠 부분을 찍으세요.'+moved,'디자인 시스템','화면 그리드').then(a=>{
+    if(a==='디자인 시스템') void vscode.commands.executeCommand('pointCode.openPalette');
+    if(a==='화면 그리드') void vscode.commands.executeCommand('pointCode.openScreens');
+  });
 }
-async function copyScript(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: Start를 실행하세요.');await vscode.env.clipboard.writeText(scriptTag(session));vscode.window.showInformationMessage('스크립트 태그를 복사했습니다. 개발용 HTML의 </body> 앞에 넣으세요. 포트·토큰은 이 프로젝트에서 계속 유지됩니다.');}
-async function copyProxyUrl(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: Start를 실행하세요.');await vscode.env.clipboard.writeText(pageUrl(session));vscode.window.showInformationMessage('프록시 주소를 복사했습니다: '+pageUrl(session));}
+function openPreview(s) {
+  if(panel) return panel.reveal(vscode.ViewColumn.One);
+  panel = vscode.window.createWebviewPanel('pointCode','Point Code',vscode.ViewColumn.One,{enableScripts:true,retainContextWhenHidden:true,localResourceRoots:[]});
+  panel.webview.html = previewHtml(s);
+  panel.webview.onDidReceiveMessage(m=>{
+    if(m.type==='url') void copyProxyUrl();
+    if(m.type==='copy') void copyScript();
+    if(m.type==='styles'&&selected) void candidates(selected,true);
+    if(m.type==='palette') void vscode.commands.executeCommand('pointCode.openPalette');
+    if(m.type==='screens') void vscode.commands.executeCommand('pointCode.openScreens');
+    if(m.type==='loaded' && pendingFocus) {const f = pendingFocus; pendingFocus = undefined; setTimeout(()=>broadcast({focus:f}),400);}
+  });
+  const own = panel; own.onDidDispose(()=>{if(panel===own) panel=undefined;});
+}
+// Screens board → preview: go to that route (or stay, if already there) and scroll to a captured layer.
+function showInPreview(route, selector) {
+  if(!session) return vscode.window.showInformationMessage('먼저 Point Code: 시작을 실행하세요.');
+  openPreview(session);
+  if(selector) pendingFocus = {selector,route};
+  panel?.webview.postMessage({type:'navigate',route});
+}
+let broadcast = () => {};
+function previewHtml(s) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const src = escape(pageUrl(s));
+  const app = escape(s.target.href);
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${escape(s.base)}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>
+body{padding:0;margin:0;font:13px system-ui;background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);display:flex;flex-direction:column;height:100vh}
+.bar{padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--vscode-panel-border,#8884)}
+.bar strong{margin-right:4px}
+button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:6px 10px;cursor:pointer;border-radius:4px;font:inherit}
+button.ghost{background:transparent;color:inherit;border:1px solid var(--vscode-widget-border,#8884)}
+button.chip{background:var(--vscode-editorWidget-background);color:inherit;border:1px solid var(--vscode-widget-border,#8884);padding:4px 8px;font-size:12px;border-radius:999px}
+button.chip.on{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-color:transparent}
+.help{padding:8px 12px;font-size:12px;line-height:1.5;opacity:.9;border-bottom:1px solid var(--vscode-panel-border,#8884);background:var(--vscode-textBlockQuote-background,transparent)}
+.help b{opacity:1}
+.devices{padding:8px 12px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;border-bottom:1px solid var(--vscode-panel-border,#8884)}
+.devices .lbl{font-size:11px;opacity:.65;margin-right:4px}
+.stage{flex:1;min-height:0;overflow:auto;background:#1a1a1a;display:flex;justify-content:center;align-items:flex-start;padding:12px}
+.frame-shell{background:#fff;box-shadow:0 0 0 1px #0003;overflow:hidden;width:100%;height:100%}
+iframe{width:100%;height:100%;border:0;display:block;background:#fff}
+</style></head><body>
+<div class="bar">
+  <strong>Point Code</strong>
+  <button id="palette">디자인 시스템</button>
+  <button id="screens">화면 그리드</button>
+  <button class="ghost" id="reload">새로고침</button>
+  <button class="ghost" id="url">주소 복사</button>
+  <button class="ghost" id="styles">CSS 후보</button>
+</div>
+<div class="help">
+  <b>미리보기</b> · <code>${app}</code> · 오른쪽 아래 <b>요소 선택</b>(Alt+Shift+P) → 사이드바에서 수정 → <b>소스에 저장</b>
+</div>
+<div class="devices" id="devices"><span class="lbl">해상도</span></div>
+<div class="stage"><div class="frame-shell" id="shell"><iframe id="frame" src="${src}" title="개발 화면" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"></iframe></div></div>
+<script nonce="${nonce}">
+const api=acquireVsCodeApi();
+const frame=document.getElementById('frame'),shell=document.getElementById('shell'),devices=document.getElementById('devices');
+const list=[{id:'full',label:'전체',w:0,h:0}].concat(${JSON.stringify(DEVICES)});
+const origin=${JSON.stringify(s.base)};let route=${JSON.stringify(s.target.pathname+s.target.search+s.target.hash)};
+let cur='full';
+function paint(){
+  devices.querySelectorAll('button.chip').forEach(b=>b.classList.toggle('on',b.dataset.id===cur));
+  const d=list.find(x=>x.id===cur)||list[0];
+  if(!d.w){shell.style.width='100%';shell.style.height='100%';shell.style.maxHeight='none';return;}
+  const maxW=Math.max(200,devices.parentElement.clientWidth-40),maxH=Math.max(200,window.innerHeight-200);
+  const scale=Math.min(1,maxW/d.w,maxH/d.h);
+  shell.style.width=Math.round(d.w*scale)+'px';
+  shell.style.height=Math.round(d.h*scale)+'px';
+  frame.style.width=d.w+'px';frame.style.height=d.h+'px';
+  frame.style.transform='scale('+scale+')';frame.style.transformOrigin='0 0';
+}
+for(const d of list){
+  const b=document.createElement('button');b.type='button';b.className='chip'+(d.id===cur?' on':'');b.dataset.id=d.id;b.textContent=d.label;
+  b.title=d.w?d.w+'×'+d.h+(d.approx?' (근사값)':''):'창 너비 전체';b.onclick=()=>{cur=d.id;if(!d.w){frame.style.width='100%';frame.style.height='100%';frame.style.transform='';}paint();};
+  devices.append(b);
+}
+window.addEventListener('resize',paint);paint();
+for(const id of ['url','styles','palette','screens'])document.getElementById(id).onclick=()=>api.postMessage({type:id});
+document.getElementById('reload').onclick=()=>{frame.src=frame.src;};
+frame.addEventListener('load',()=>api.postMessage({type:'loaded'}));
+window.addEventListener('message',e=>{
+  if(e.data?.type!=='navigate'||typeof e.data.route!=='string')return;
+  if(e.data.route===route){api.postMessage({type:'loaded'});return;}
+  route=e.data.route;frame.src=origin+route;
+});
+</script></body></html>`;
+}
+async function copyScript(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: 시작을 실행하세요.');await vscode.env.clipboard.writeText(scriptTag(session));vscode.window.showInformationMessage('스크립트 태그를 복사했습니다. 개발용 HTML의 </body> 앞에 넣으세요. 포트·토큰은 이 프로젝트에서 계속 유지됩니다.');}
+async function copyProxyUrl(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: 시작을 실행하세요.');await vscode.env.clipboard.writeText(pageUrl(session));vscode.window.showInformationMessage('프록시 주소를 복사했습니다: '+pageUrl(session));}
 function activate(context){
-  const live=payload=>{if(!session)return;const data='data: '+JSON.stringify(payload)+'\n\n';for(const res of session.live){try{res.write(data);}catch{session.live.delete(res);}}};
+  // Previews go to every connected page over SSE, and to the Screens board frames through the board webview.
+  const live=payload=>{broadcast(payload);if(payload?.channel)screens?.forward(payload);};
+  const targetPort=()=>session?.target.port||'';
+  broadcast=payload=>{if(!session)return;const data='data: '+JSON.stringify(payload)+'\n\n';for(const res of session.live){try{res.write(data);}catch{session.live.delete(res);}}};
+  const proxyBase=()=>session?.base||'';
   inspector=createInspector(context,{openSource,bySuffix,readLines,live,candidates:()=>selected&&candidates(selected,false),styles:()=>selected&&candidates(selected,true)});
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider('pointCode.inspector',inspector.provider,{webviewOptions:{retainContextWhenHidden:true}}));
-  for(const [id,fn] of Object.entries({start:()=>start(context),copyScript,copyProxyUrl,styles:()=>selected?candidates(selected,true):vscode.window.showInformationMessage('먼저 페이지 요소를 선택하세요.'),stop}))context.subscriptions.push(vscode.commands.registerCommand('pointCode.'+id,async()=>{try{await fn();}catch(e){vscode.window.showErrorMessage(e.message);}}));context.subscriptions.push({dispose:()=>void stop()});}
+  palette=createPalette(context,{openSource,bySuffix,live,proxyBase});
+  screens=createScreens(context,{live,proxyBase,targetPort,showInPreview});
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('pointCode.inspector',inspector.provider,{webviewOptions:{retainContextWhenHidden:true}}),
+    vscode.window.registerWebviewViewProvider('pointCode.palette',palette.provider,{webviewOptions:{retainContextWhenHidden:true}}),
+    vscode.window.registerWebviewViewProvider('pointCode.screens',screens.provider,{webviewOptions:{retainContextWhenHidden:true}})
+  );
+  const cmds={
+    start:()=>start(context),changeUrl:()=>connect(context),copyScript,copyProxyUrl,
+    styles:()=>selected?candidates(selected,true):vscode.window.showInformationMessage('먼저 페이지 요소를 선택하세요.'),
+    stop,['palette.refresh']:()=>palette.refresh(),['screens.refresh']:()=>screens.refresh(),
+    openPalette:()=>palette.reveal(),openScreens:()=>screens.reveal()
+  };
+  for(const [id,fn] of Object.entries(cmds))context.subscriptions.push(vscode.commands.registerCommand('pointCode.'+id,async()=>{try{await fn();}catch(e){vscode.window.showErrorMessage(e.message);}}));
+  context.subscriptions.push({dispose:()=>void stop()});
+}
 module.exports={activate,deactivate:stop};

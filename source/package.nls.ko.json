@@ -1,0 +1,17 @@
+{
+  "displayName": "Point Code",
+  "description": "로컬 웹 화면에서 요소를 클릭해 컴포넌트·CSS를 보고, 디자인 토큰을 실시간으로 고친 뒤 소스에 저장합니다. React, Vue, Svelte, Next.js, Tailwind 지원.",
+  "cmd.start": "시작 / 미리보기 열기",
+  "cmd.changeUrl": "개발 서버 주소 바꾸기",
+  "cmd.openPalette": "디자인 시스템 열기",
+  "cmd.openScreens": "화면 그리드 열기",
+  "cmd.copyProxyUrl": "프록시 주소 복사",
+  "cmd.copyScript": "연결 스크립트 복사",
+  "cmd.styles": "선택한 요소의 스타일 찾기",
+  "cmd.palette.refresh": "디자인 시스템 새로고침",
+  "cmd.screens.refresh": "화면 그리드 새로고침",
+  "cmd.stop": "중지",
+  "view.inspector": "요소 인스펙터",
+  "view.palette": "디자인 시스템",
+  "view.screens": "화면 그리드"
+}

@@ -1,7 +1,9 @@
 (()=>{
   const api=acquireVsCodeApi();const root=document.getElementById('root');
-  const state=api.getState()||{showLib:false};let data=null,pick=null,identity='';
-  const drafts=new Map(),committed=new Map(),pending=new Map(),wide=new Map();
+  const state=api.getState()||{showLib:false};let data=null,pick=null,identity=null,saving=false;
+  // Unsaved edits of the previously picked element: offered for saving instead of being dropped silently.
+  let stale=null;
+  const drafts=new Map(),committed=new Map(),pending=new Map(),wide=new Map();let lastTag='';
   const h=(tag,cls,...kids)=>{const n=document.createElement(tag);if(cls)n.className=cls;for(const k of kids.flat(Infinity)){if(k==null||k===false)continue;n.append(k instanceof Node?k:String(k));}return n;};
   const action=(cls,label,fn,title)=>{const a=h('a',cls,label);a.href='#';if(title)a.title=title;a.onclick=e=>{e.preventDefault();fn();};return a;};
   const open=id=>api.postMessage({type:'open',id});
@@ -9,7 +11,7 @@
   const swatch=v=>{const m=String(v).match(/#[0-9a-f]{3,8}\b|(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb|color)\([^)]*\)/i);if(!m)return null;const s=h('span','sw');s.style.background=m[0];return s;};
   const COLOR_PROP=/^(color|background-color|background|border-color|outline-color|fill|stroke|caret-color|accent-color|text-decoration-color)$/;
   const colorish=(p,v)=>/url\(|gradient\(/i.test(v)?/var\(\s*--/.test(v):COLOR_PROP.test(p)||/^(#|rgba?\(|hsla?\(|oklch\(|oklab\(|lab\(|lch\(|hwb\(|color\(|transparent$|currentcolor$|var\(\s*--)/i.test(String(v).trim());
-  const kindFor=p=>COLOR_PROP.test(p)?'color':p==='font-weight'?'weight':p==='font-family'?'font':p==='font-size'?'size':/margin|padding|gap|radius/.test(p)?'space':null;
+  const kindFor=p=>COLOR_PROP.test(p)?'color':p==='font-weight'?'weight':p==='font-family'?'font':p==='font-size'||p==='width'||p==='height'||p==='min-width'||p==='max-width'||p==='min-height'||p==='max-height'?'size':/margin|padding|gap|radius/.test(p)?'space':null;
   function toHex(v){try{const c=h('span');c.style.color=v;root.append(c);const rgb=getComputedStyle(c).color;c.remove();const m=rgb.match(/(\d+),\s*(\d+),\s*(\d+)/);return m?'#'+[m[1],m[2],m[3]].map(x=>(+x).toString(16).padStart(2,'0')).join(''):'#888888';}catch{return '#888888';}}
   function section(title,count,kids,openByDefault=true){const d=h('details','sec');d.open=openByDefault;d.append(h('summary',null,title,count!=null?h('span','count',String(count)):null),...[kids].flat(Infinity).filter(Boolean));return d;}
   function chip(p){
@@ -25,6 +27,7 @@
     const mode=extra?.mode||(useToken?'token':r.loc?.utility?'utility':r.inline?'inline':'css');
     const tok=(data.tokens||[]).find(t=>t.n===(extra?.token||tokenName));
     return {
+      selId:data.sel,tokenSel:tok?.sel||null,
       mode,id:r.loc&&r.loc.id,prop:d.p,value,old:committed.get(r.loc?.id+':'+d.p)??d.v,token:extra?.token||tokenName,file:extra?.file||tok?.file,
       css:useToken?[]:[{selector:r.selector,prop:d.p,value,scope:r.loc?.utility?'element':'rule',from:r.from||null}],
       tokens:useToken&&tokenName?[{n:tokenName,v:value}]:[],
@@ -34,20 +37,24 @@
   function setFoot(kind,message,canSave){
     const n=document.getElementById('status'),b=document.getElementById('save');
     if(n){n.className='status '+kind;n.textContent=message||'';}
-    if(b){b.disabled=!canSave && pending.size===0;b.textContent=pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장';}
+    if(b){b.disabled=saving||(!canSave && pending.size===0);b.textContent=saving?'저장 중…':pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장';}
   }
-  function preview(key,p,savable){
+  function preview(key,p,mapped){
     drafts.set(key,p.value);
+    // Always queue — persist() may still locate a unique workspace CSS rule even when loc.save was false.
+    pending.set(key,p);
     api.postMessage({type:'preview',...p});
-    if(savable){pending.set(key,p);setFoot('preview','화면 미리보기 · 파일은 아직입니다. ‘소스에 저장’을 누르세요.',true);}
-    else setFoot('warn','화면만 바뀜 · 이 규칙은 번들 CSS라 프로젝트 파일이 없습니다. 저장되지 않습니다.',pending.size>0);
+    if(mapped) setFoot('preview','화면 미리보기 · 파일은 아직입니다. ‘소스에 저장’을 누르세요.',true);
+    else setFoot('warn','화면 미리보기 · 원본 파일을 아직 모릅니다. ‘소스에 저장’을 누르면 워크스페이스에서 찾아 봅니다.',true);
   }
+  // One save request; the host writes the items in order and reports each one. Failed items stay pending.
   function saveAll(){
-    if(!pending.size)return;
-    const items=[...pending];pending.clear();
+    if(!pending.size||saving)return;
+    saving=true;
+    api.postMessage({type:'save',items:[...pending].map(([key,p])=>({key,...p}))});
     setFoot('preview','파일에 쓰는 중…',false);
-    for(const [,p] of items) api.postMessage({type:'edit',...p});
   }
+  function saveStale(){if(!stale)return;api.postMessage({type:'save',items:stale.items.map(([key,p])=>({key:'stale:'+key,...p}))});stale=null;render();}
 
   function optionsFor(prop){
     const kind=kindFor(prop), tokens=(data.tokens||[]).filter(t=>t.kind===kind);
@@ -59,7 +66,7 @@
     const WEIGHT_SUFFIX={100:'thin',200:'extralight',300:'light',400:'normal',500:'medium',600:'semibold',700:'bold',800:'extrabold',900:'black'};
     const q=h('input');q.type='search';q.placeholder=kind==='color'?'색 토큰 검색':kind==='weight'?'굵기 검색':kind==='font'?'폰트 검색':'검색';
     const list=h('div');
-    const apply=(value,extra)=>preview(key,payload(r,d,value,extra),!!(r.loc?.save||extra?.token));
+    const apply=(value,extra)=>{preview(key,payload(r,d,value,extra),!!(r.loc?.save||extra?.token||extra?.file));render();};
     const draw=()=>{
       list.textContent='';
       const s=q.value.trim().toLowerCase();
@@ -85,7 +92,7 @@
         list.append(h('div','tok-title','디자인 토큰'));
         for(const t of tokens.filter(t=>!s||t.n.toLowerCase().includes(s)||t.v.toLowerCase().includes(s)).slice(0,80)){
           const on=(drafts.get(key)||d.v).includes(t.n);
-          const item=h('div','item'+(on?' on':''),kind==='color'?(swatch(t.c||t.v)||h('span','sw')):null,h('code',null,t.n),h('span','muted',t.v));
+          const item=h('button','item'+(on?' on':''),kind==='color'?(swatch(t.c||t.v)||h('span','sw')):null,h('code',null,t.n),h('span','muted',t.v));item.type='button';
           item.onclick=()=>apply('var('+t.n+')',{mode:r.loc?.utility?'utility':'css',token:t.n,file:t.file});
           list.append(item);
         }
@@ -105,7 +112,8 @@
     const field=h('input');field.type='text';field.value=val;field.spellcheck=false;
     // Weight/font: typing is allowed as fallback, but the primary path is the picker.
     if(axis==='weight'||axis==='font') field.placeholder=axis==='weight'?'예: 500 또는 medium':'예: sans-serif';
-    const push=v=>preview(key,payload(r,d,v,{mode:isWide?'token':undefined}),!!(isWide||r.loc?.save));
+    const mapped=!!(isWide||r.loc?.save);
+    const push=v=>preview(key,payload(r,d,v,{mode:isWide?'token':undefined}),mapped);
     field.oninput=()=>push(field.value);
     const rowKids=[h('span','p',d.p),': '];
     if(color){
@@ -120,8 +128,6 @@
     }
     if(d.imp) rowKids.push(h('span','imp',' !important'));
     const notes=[];
-    if(r.from) notes.push(h('div','note parent','부모 '+(r.from)+' 의 규칙입니다. 여기 값을 바꾸면 이 부모를 상속하는 다른 요소도 함께 바뀝니다'+(r.kids? ' · 아래 요소 약 '+r.kids+'개':'')+'.'));
-    else if(r.hits>1) notes.push(h('div','note','이 규칙 · 화면에서 '+r.hits+'개 요소에 적용됩니다. 바꾸면 모두 함께 미리보기됩니다.'));
     if(tokenName){
       const w=isWide;
       const all=h('button','mode'+(w?' on':''),'토큰 '+tokenName+' 전체');
@@ -130,32 +136,57 @@
       one.onclick=()=>{wide.set(r.loc?.id+':'+d.p,false);render();};
       notes.push(h('div','note token','현재 값이 디자인 토큰입니다. ',all,' ',one, w?' · 토큰 정의를 고치면 이 토큰을 쓰는 모든 곳이 바뀝니다.':' · 이 규칙만 토큰에서 분리합니다.'));
     }
-    if(r.loc?.utility) notes.push(h('div','note','className 유틸리티입니다. 저장 시 클래스 이름이 바뀝니다.'+((r.from)?' 부모 요소의 className을 고칩니다.':'')));
-    if(!r.loc?.save) notes.push(h('div','note warn','미리보기만 · 원본 CSS 파일이 없습니다. Tailwind className 규칙은 저장됩니다. 번들 stylesheet는 화면 확인용입니다.'));
     return h('div','editwrap',h('div','edit',...rowKids),notes,pick&&pick.key===key?pickPanel(r,d,key):null);
+  }
+  // Notes once per rule (not per declaration), only for rules that can be edited.
+  function ruleNotes(r){
+    if(r.base||!r.decls.some(d=>!d.over))return [];
+    const notes=[];
+    if(r.from) notes.push(h('div','note parent','부모 '+r.from+'의 규칙 · 바꾸면 이 부모를 상속하는 요소'+(r.kids?' 약 '+r.kids+'개':'')+'도 함께 바뀝니다.'));
+    else if(r.hits>1) notes.push(h('div','note','화면의 '+r.hits+'개 요소에 적용되는 규칙 · 함께 바뀝니다.'));
+    if(r.loc?.utility) notes.push(h('div','note','className 유틸리티 · 저장하면 '+(r.from?'부모 요소의 ':'')+'클래스 이름이 바뀝니다.'));
+    if(r.loc&&!r.loc.save&&!r.loc.utility) notes.push(h('div','note warn','원본 위치를 아직 모름 · 저장하면 워크스페이스에서 같은 규칙을 한 번 더 찾습니다.'));
+    return notes;
   }
   function rule(r,kind,index){
     return h('div','rule'+(r.base?' base':'')+(r.from?' inherited':''),
       h('div','rhead',r.from?h('span','from','← '+r.from):null,h('code','sel',r.selector),r.hits>1?h('span','badge',r.hits+'개'):null,r.loc&&r.loc.save===false?h('span','badge warn','미리보기만'):null,r.state?h('span','badge state',r.state):null,r.ctx.map(c=>h('span','badge',c)),link(r.loc)),
+      ruleNotes(r),
       h('div','decls',r.decls.map(d=>editor(r,d,kind,index))));
   }
   function render(){
-    const id=data?data.el.tag+'|'+(data.el.id||'')+'|'+(data.el.text||''):'';
-    if(id!==identity){drafts.clear();committed.clear();pending.clear();wide.clear();pick=null;identity=id;}
+    // Each pick has its own id from the host: two identical-looking elements (same tag and text) are still different targets.
+    const id=data?data.sel:null;
+    const same=id===identity;
+    const scrollY=same?(document.documentElement.scrollTop||document.body.scrollTop||0):0;
+    if(!same){
+      if(pending.size)stale={items:[...pending],tag:lastTag};
+      drafts.clear();committed.clear();pending.clear();wide.clear();pick=null;identity=id;saving=false;
+    }
     const keep=document.getElementById('status');
     root.textContent='';
-    if(!data){root.append(h('p','empty','개발 화면에서 ‘요소 선택’으로 요소를 고르면 여기서 텍스트와 색을 바로 고칠 수 있습니다. 화면에는 즉시 반영됩니다.'));return;}
+    if(!data){
+      root.append(h('p','empty','개발 화면에서 ‘요소 선택’으로 요소를 고르면 여기서 텍스트와 색을 바로 고칠 수 있습니다. 화면에는 즉시 반영됩니다.'));
+      root.append(h('div','nav',action('navbtn','디자인 시스템',()=>api.postMessage({type:'open-palette'})),action('navbtn','화면 그리드',()=>api.postMessage({type:'open-screens'}))));
+      return;
+    }
     const e=data.el;
+    lastTag='<'+e.tag+(e.id?'#'+e.id:'')+'>';
+    if(stale){
+      const sv=h('button','mode on','저장'),dc=h('button','mode','버리기');sv.onclick=saveStale;dc.onclick=()=>{stale=null;render();};
+      root.append(h('div','note warn stale','이전 요소 '+stale.tag+'에서 저장하지 않은 변경 '+stale.items.length+'개 (화면 미리보기는 해제됨) ',sv,' ',dc));
+    }
     root.append(h('div','head',h('code','tag','<'+e.tag+(e.id?'#'+e.id:'')+(e.classes.length?'.'+e.classes.slice(0,6).join('.'):'')+'>'),link(data.element)));
+    root.append(h('div','nav',action('navbtn','디자인 시스템',()=>api.postMessage({type:'open-palette'})),action('navbtn','화면 그리드',()=>api.postMessage({type:'open-screens'}))));
     if(data.error)root.append(h('p','warn','일부 정보를 수집하지 못했습니다: '+data.error));
-    root.append(h('p','hint','값을 바꾸면 화면은 바로 바뀝니다. 파일에 넣으려면 아래 ',h('b',null,'소스에 저장'),'을 누르세요. ',h('span','muted','‘미리보기만’ 규칙은 번들 CSS라 파일에는 안 들어갑니다.')));
+    root.append(h('p','hint','값을 바꾸면 화면에 바로 보이고, ',h('b',null,'소스에 저장'),'(Ctrl+S)을 눌러야 파일에 들어갑니다.'));
 
     const text=e.ownText||e.text;
     const from=data.components.find(c=>c.props.some(p=>p.t));const p=from&&from.props.find(p=>p.t);
     const textId=from?.loc?.id ?? data.element.id, textOld=e.ownText||e.text||'';
     if(text||from){
       const ti=h('input');ti.type='text';ti.className='textedit';ti.value=drafts.has('text')?drafts.get('text'):text||'';ti.maxLength=200;
-      const sendText=v=>({mode:'text',id:textId,value:v,old:committed.get('text')??textOld,text:v});
+      const sendText=v=>({selId:data.sel,mode:'text',id:textId,value:v,old:committed.get('text')??textOld,text:v});
       ti.oninput=()=>preview('text',sendText(ti.value),!!data.element.save);
       root.append(section('텍스트',null,[ti,h('div','row','요소 위치 ',link(data.element)),
         from?h('div','row','prop에서 전달: ',h('b',null,from.name),' ',h('code',null,p.k+'='+p.v),' ',link(from.loc),h('span','muted',' · 사용 위치의 문구가 저장됩니다')):null]));
@@ -180,15 +211,24 @@
     if(data.vars.length)root.append(section('사용된 CSS 변수',data.vars.length,h('div','grid',data.vars.map(([p,v])=>[h('span','p',p),h('span','v',swatch(v),v||'(정의 없음)')]))));
     const st=h('div','status');st.id='status';if(keep){st.className=keep.className;st.textContent=keep.textContent;}
     else {st.className='status';st.textContent='값을 바꾸면 화면에 바로 보입니다. 파일에 쓰려면 저장을 누르세요.';}
-    const save=h('button','save','소스에 저장');save.id='save';save.disabled=!pending.size;save.onclick=saveAll;
-    save.textContent=pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장';
+    const save=h('button','save','소스에 저장');save.id='save';save.disabled=saving||!pending.size;save.onclick=saveAll;
+    save.textContent=saving?'저장 중…':pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장';
     root.append(h('div','foot',st,save));
+    requestAnimationFrame(()=>{document.documentElement.scrollTop=scrollY;document.body.scrollTop=scrollY;});
   }
   window.addEventListener('message',e=>{
     if(e.data?.type==='data'){data=e.data.data;render();}
-    if(e.data?.type==='status'){
-      setFoot(e.data.kind,e.data.message,pending.size>0);
-      if(e.data.kind==='saved') for(const [k,v] of drafts) committed.set(k,v);
+    if(e.data?.type==='status')setFoot(e.data.kind,e.data.message,pending.size>0);
+    if(e.data?.type==='save-result'){
+      saving=false;
+      for(const r of e.data.results||[]){
+        if(!r.ok||String(r.key).startsWith('stale:'))continue;
+        // Saved: the file now holds this value, so the next edit of the same declaration replaces it.
+        if(drafts.has(r.key))committed.set(r.key,drafts.get(r.key));
+        pending.delete(r.key);
+      }
+      const failed=(e.data.results||[]).filter(r=>!r.ok);
+      setFoot(e.data.kind,e.data.message+(failed.length>1?' (외 '+(failed.length-1)+'개 실패: '+failed.slice(1,3).map(r=>r.message).join(' / ')+')':''),pending.size>0);
     }
   });
   window.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveAll();}});

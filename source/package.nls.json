@@ -1,0 +1,17 @@
+{
+  "displayName": "Point Code",
+  "description": "Click a local web UI element to inspect components & CSS, live-edit design tokens, and save back to source. Works with React, Vue, Svelte, Next.js, and Tailwind.",
+  "cmd.start": "Start / Open Preview",
+  "cmd.changeUrl": "Change Dev Server URL",
+  "cmd.openPalette": "Open Design System",
+  "cmd.openScreens": "Open Screens Board",
+  "cmd.copyProxyUrl": "Copy Proxy URL",
+  "cmd.copyScript": "Copy Connection Script",
+  "cmd.styles": "Find Styles for Selected Element",
+  "cmd.palette.refresh": "Refresh Design System",
+  "cmd.screens.refresh": "Refresh Screens",
+  "cmd.stop": "Stop",
+  "view.inspector": "Element Inspector",
+  "view.palette": "Design System",
+  "view.screens": "Screens"
+}

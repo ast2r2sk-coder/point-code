@@ -191,6 +191,32 @@ function setVariable(text, name, value, line) {
   const h = hits.at(-1); if (!h) return null;
   return {text:text.slice(0, h.start)+value+text.slice(h.end), line:lineAt(text, h.start)};
 }
+// Token definition to edit when a theme defines it more than once (`:root` + `.dark`, `@theme` + `.dark`).
+// `selector` is the rule the page reported (compiled CSS, e.g. `:root, :host` for Tailwind v4 `@theme`); otherwise the base theme wins.
+function setVariableIn(text, name, value, selector) {
+  const lines = text.split(/\r?\n/);
+  const inRule = sel => { const n = sel && locateSelector(lines, sel); const r = n && setVariable(text, name, value, n); return r ? {...r, selector:sel} : null; };
+  if (selector) {
+    const authored = authoredSelector(selector);
+    for (const sel of [authored, ...authored.split(',').map(s => s.trim()).filter(Boolean)]) { const r = inRule(sel); if (r) return r; }
+  }
+  const unique = setVariable(text, name, value);
+  if (unique) return {...unique, selector:null};
+  for (const sel of [':root', '@theme', 'html']) { const r = inRule(sel); if (r) return r; }
+  return null;
+}
+// Smallest single replacement turning `a` into `b`, so an edit keeps the cursor, folding and undo history of the rest of the file.
+function diffRange(a, b) {
+  const max = Math.min(a.length, b.length);
+  let s = 0; while (s < max && a[s] === b[s]) s++;
+  let e = 0; while (e < max-s && a[a.length-1-e] === b[b.length-1-e]) e++;
+  return {start:s, end:a.length-e, text:b.slice(s, b.length-e)};
+}
+// Runs async jobs one after another (saves that touch the same file must not read the same original text).
+function serial() {
+  let tail = Promise.resolve();
+  return fn => { const run = tail.then(fn, fn); tail = run.catch(() => {}); return run; };
+}
 // Named Tailwind font-weight utilities and numeric aliases used by design systems.
 const WEIGHT_NAME = {100:'thin',200:'extralight',300:'light',400:'normal',500:'medium',600:'semibold',700:'bold',800:'extrabold',900:'black'};
 const WEIGHT_FROM = Object.fromEntries(Object.entries(WEIGHT_NAME).flatMap(([n, name]) => [[name, name], [n, name], ['w'+n, name]]));
@@ -275,4 +301,4 @@ function setInlineStyle(text, line, prop, value, file = '') {
   return bad ? null : {text:lines.join('\n'), line:hit.line};
 }
 module.exports = {SOURCE_EXT,EXCLUDE,localUrl,originAliases,sourcePath,safeSource,hasToken,scoreLine,rank,selectorClasses,unhash,locateSelector,nearUsage,
-  authoredSelector,setDeclaration,setVariable,swapUtility,replaceClass,replaceText,setInlineStyle,weightUtil,WEIGHT_NAME};
+  authoredSelector,setDeclaration,setVariable,setVariableIn,diffRange,serial,swapUtility,replaceClass,replaceText,setInlineStyle,weightUtil,WEIGHT_NAME};

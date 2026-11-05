@@ -1,12 +1,18 @@
 {
   "name": "point-code",
-  "displayName": "Point Code",
-  "description": "Click a local web UI element to inspect components & CSS, live-edit design tokens, and save back to source. Works with React, Vue, Svelte, Next.js, and Tailwind.",
-  "version": "0.4.2",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.6.0",
   "publisher": "personal-tools",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other", "Visualization"],
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
   "keywords": [
     "inspect",
     "inspector",
@@ -35,12 +41,21 @@
   },
   "homepage": "https://github.com/ast2r2sk-coder/point-code#readme",
   "main": "./extension.js",
-  "extensionKind": ["ui"],
+  "extensionKind": [
+    "ui"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": false },
+    "untrustedWorkspaces": {
+      "supported": false
+    },
     "virtualWorkspaces": false
   },
-  "activationEvents": ["onCommand:pointCode.start"],
+  "activationEvents": [
+    "onCommand:pointCode.start",
+    "onView:pointCode.inspector",
+    "onView:pointCode.palette",
+    "onView:pointCode.screens"
+  ],
   "scripts": {
     "test": "node --test test/*.test.js",
     "package": "python package-vsix.py"
@@ -60,16 +75,71 @@
         {
           "type": "webview",
           "id": "pointCode.inspector",
-          "name": "Element Inspector"
+          "name": "%view.inspector%"
+        },
+        {
+          "type": "webview",
+          "id": "pointCode.palette",
+          "name": "%view.palette%"
+        },
+        {
+          "type": "webview",
+          "id": "pointCode.screens",
+          "name": "%view.screens%"
         }
       ]
     },
     "commands": [
-      { "command": "pointCode.start", "title": "Point Code: Start / Open Preview" },
-      { "command": "pointCode.copyProxyUrl", "title": "Point Code: Copy Proxy URL" },
-      { "command": "pointCode.copyScript", "title": "Point Code: Copy Connection Script" },
-      { "command": "pointCode.styles", "title": "Point Code: Find Styles for Selected Element" },
-      { "command": "pointCode.stop", "title": "Point Code: Stop" }
+      {
+        "command": "pointCode.start",
+        "title": "%cmd.start%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.changeUrl",
+        "title": "%cmd.changeUrl%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.openPalette",
+        "title": "%cmd.openPalette%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.openScreens",
+        "title": "%cmd.openScreens%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.copyProxyUrl",
+        "title": "%cmd.copyProxyUrl%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.copyScript",
+        "title": "%cmd.copyScript%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.styles",
+        "title": "%cmd.styles%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.palette.refresh",
+        "title": "%cmd.palette.refresh%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.screens.refresh",
+        "title": "%cmd.screens.refresh%",
+        "category": "Point Code"
+      },
+      {
+        "command": "pointCode.stop",
+        "title": "%cmd.stop%",
+        "category": "Point Code"
+      }
     ]
   }
 }

@@ -1,12 +1,16 @@
 (()=>{
   if(window.__pointCodeCleanup) window.__pointCodeCleanup();
   const endpoint=__POINT_ENDPOINT__;
+  // Screens board frames are thumbnails: no picker UI, no SSE (browsers allow ~6 connections per host), no polling.
+  // They get live previews from the board webview (their parent) by postMessage instead.
+  const BOARD=window.name==='point-code-board'&&window.parent!==window;
+  const DOC=Math.random().toString(36).slice(2,12);
   let active=false,last=null;
   const host=document.createElement('div');host.setAttribute('data-point-code-ui','');
   host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';
   const shadow=host.attachShadow({mode:'open'});
   shadow.innerHTML=`<style>*{box-sizing:border-box}.box{display:none;position:fixed;border:2px solid #8b5cf6;background:#8b5cf620;pointer-events:none}.label{position:fixed;display:none;background:#6d28d9;color:white;font:12px system-ui;padding:5px 8px;max-width:90vw;white-space:nowrap;overflow:hidden}.bar{position:fixed;bottom:16px;right:16px;display:flex;gap:8px;align-items:center;background:#17151f;color:white;padding:8px;border:1px solid #65577e;border-radius:12px;box-shadow:0 4px 24px #0005;font:12px system-ui;pointer-events:auto}button{border:0;border-radius:7px;padding:9px 12px;background:#8b5cf6;color:white;cursor:pointer}span{max-width:220px}</style><div class="box"></div><div class="label"></div><div class="bar"><span>Point Code</span><button>요소 선택</button></div>`;
-  document.documentElement.append(host);
+  if(!BOARD)document.documentElement.append(host);
   const box=shadow.querySelector('.box'),label=shadow.querySelector('.label'),button=shadow.querySelector('button'),status=shadow.querySelector('span');
   function toggle(v){active=v;button.textContent=v?'선택 중 · Esc':'요소 선택';if(!v){box.style.display=label.style.display='none';last=null;}}
   button.onclick=()=>toggle(!active);
@@ -193,36 +197,81 @@
   const liveStyle=document.createElement('style');liveStyle.setAttribute('data-point-code-live','');
   const liveMark=document.createElement('style');liveMark.setAttribute('data-point-code-live','');liveMark.textContent='[data-point-picked]{outline:2px solid #8b5cf6;outline-offset:1px}[data-point-from]{outline:2px dashed #f59e0b;outline-offset:2px}[data-point-affected]{outline:2px dashed #a78bfa;outline-offset:2px}';
   document.documentElement.append(liveStyle,liveMark);
-  let picked=null,origText=null,tokenSet=new Set(),es,esTimer;
+  // Token previews per channel: the Design System board and the inspector each own theirs, so one never erases the other.
+  let picked=null,origText=null,es,esTimer,poll;const tokenSets={palette:new Map(),inspector:new Map()},applied=new Set();
   const okVal=v=>typeof v==='string'&&v.length<=300&&!/[{}]|<\/|javascript:/i.test(v);
   const okProp=p=>typeof p==='string'&&/^-{0,2}[\w-]+$/.test(p);
   const clearAttr=a=>document.querySelectorAll('['+a+']').forEach(n=>n.removeAttribute(a));
   function restoreText(){if(picked&&origText!=null){const nodes=[...picked.childNodes].filter(n=>n.nodeType===3);if(nodes[0])nodes[0].textContent=origText;}origText=null;}
-  function resetLive(){liveStyle.textContent='';for(const n of tokenSet)document.documentElement.style.removeProperty(n);tokenSet.clear();restoreText();clearAttr('data-point-affected');clearAttr('data-point-from');}
+  function paintTokens(){const st=document.documentElement.style;for(const n of applied)st.removeProperty(n);applied.clear();for(const ch of ['palette','inspector'])for(const [n,v] of tokenSets[ch]){st.setProperty(n,v);applied.add(n);}}
+  // Reset = a new element was picked: only the inspector's previews go; pending Design System edits stay visible.
+  function resetLive(){liveStyle.textContent='';tokenSets.inspector.clear();paintTokens();restoreText();clearAttr('data-point-affected');clearAttr('data-point-from');}
+  function focusLayer(f){
+    if(!f||typeof f.selector!=='string'||(f.route&&f.route!==location.pathname+location.search+location.hash))return;
+    let n=null;try{n=document.querySelector(f.selector.slice(0,200));}catch{}
+    if(!n||host.contains(n))return;
+    n.scrollIntoView({block:'center',behavior:'smooth'});n.setAttribute('data-point-affected','');setTimeout(()=>n.removeAttribute('data-point-affected'),2500);
+  }
   function applyLive(msg){
     if(!msg||typeof msg!=='object')return;
+    if(msg.pullTokens){if(!BOARD)void postPalette();return;}
+    if(msg.pullScreens){if(!BOARD)void postScreens();return;}
+    if(msg.focus){if(!BOARD)focusLayer(msg.focus);return;}
+    const channel=msg.channel==='palette'?'palette':'inspector';
     if(msg.reset){resetLive();return;}
-    if(Array.isArray(msg.tokens)){for(const n of tokenSet)document.documentElement.style.removeProperty(n);tokenSet.clear();for(const t of msg.tokens){if(!okProp(t.n)||!t.n.startsWith('--')||!okVal(t.v))continue;document.documentElement.style.setProperty(t.n,t.v);tokenSet.add(t.n);}}
+    if(Array.isArray(msg.tokens)){const set=tokenSets[channel];set.clear();for(const t of msg.tokens){if(!t||!okProp(t.n)||!t.n.startsWith('--')||!okVal(t.v))continue;set.set(t.n,t.v);}paintTokens();}
+    if(channel==='palette')return;
     if(Array.isArray(msg.css))liveStyle.textContent=msg.css.map(o=>{if(!okProp(o.prop)||!okVal(o.value))return'';const sel=o.scope==='element'?(o.from?'[data-point-from]':'[data-point-picked]'):String(o.selector||'').slice(0,500);if(!sel||/[{}]|<\//.test(sel))return'';return sel+'{'+o.prop+':'+o.value+' !important;}';}).join('\n');
     if(typeof msg.text==='string'&&picked){const nodes=[...picked.childNodes].filter(n=>n.nodeType===3);if(origText==null)origText=nodes.map(n=>n.textContent).join('');if(!nodes.length)picked.insertBefore(document.createTextNode(msg.text),picked.firstChild);else{nodes[0].textContent=msg.text;for(let i=1;i<nodes.length;i++)nodes[i].textContent='';}}
     if(msg.highlight){clearAttr('data-point-affected');clearAttr('data-point-from');if(msg.highlight.from&&picked){for(let n=picked.parentElement;n;n=n.parentElement)if(describe(n)===msg.highlight.from){n.setAttribute('data-point-from','');break;}}if(!msg.highlight.broad&&msg.highlight.selector){try{for(const n of document.querySelectorAll(String(msg.highlight.selector).slice(0,500))){if(n===host||host.contains(n))continue;n.setAttribute('data-point-affected','');}}catch{}}}
   }
-  function connectLive(){try{es=new EventSource(endpoint.replace('/select?','/live?'));}catch{return;}es.onmessage=e=>{try{applyLive(JSON.parse(e.data));}catch{}};es.onerror=()=>{es.close();esTimer=setTimeout(connectLive,2000);};}
-  connectLive();
+  // Open layers (dialog/toast) → design-system screens panel.
+  // Only layers actually on screen: always-present live regions ([role=status]) and empty toast viewports are not toasts.
+  function shown(el){
+    if(host.contains(el))return false;
+    const r=el.getBoundingClientRect();if(r.width<8||r.height<8)return false;
+    const cs=getComputedStyle(el);return cs.visibility!=='hidden'&&cs.display!=='none'&&+cs.opacity>0.05&&(el.textContent||'').trim().length>0;
+  }
+  function captureLayers(){
+    const out=[],seen=new Set();
+    const add=(el,kind,label)=>{if(!el||seen.has(el)||out.length>=30||!shown(el))return;if([...seen].some(s=>s.contains(el)))return;seen.add(el);const id=el.id?'#'+el.id:el.getAttribute('role')?'[role='+el.getAttribute('role')+']':el.className&&typeof el.className==='string'?('.'+el.className.trim().split(/\s+/).slice(0,2).join('.')):el.tagName.toLowerCase();out.push({id:kind+':'+id+':'+out.length,label:(label||el.getAttribute('aria-label')||id).slice(0,80),route:location.pathname+location.search+location.hash,kind,selector:id});};
+    document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog[open]').forEach(el=>add(el,'modal','모달'));
+    document.querySelectorAll('[role="alert"],[role="status"],[class*="toast"],[class*="Toast"],[data-sonner-toast],[data-radix-toast-viewport] > *').forEach(el=>add(el,'toast','토스트'));
+    document.querySelectorAll('[role="drawer"],[data-state="open"][class*="drawer"],aside[data-state="open"]').forEach(el=>add(el,'drawer','드로어'));
+    return out;
+  }
+  const paletteUrl=endpoint.replace('/select?','/palette?');
+  const screensUrl=endpoint.replace('/select?','/screens?');
+  async function postPalette(){try{await fetch(paletteUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({tokens:designTokens()}),signal:AbortSignal.timeout(4000)});}catch{}}
+  // Reports only when the open layers change (the host also ignores repeats), tagged with this document so pages do not overwrite each other.
+  let lastLayers='';
+  async function postScreens(force){const layers=captureLayers(),key=JSON.stringify(layers);if(!force&&key===lastLayers)return;lastLayers=key;try{await fetch(screensUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({doc:DOC,layers,route:location.pathname+location.search+location.hash}),signal:AbortSignal.timeout(4000)});}catch{}}
+  function connectLive(){try{es=new EventSource(endpoint.replace('/select?','/live?'));}catch{return;}es.onmessage=e=>{try{applyLive(JSON.parse(e.data));}catch{}};es.onerror=()=>{es.close();esTimer=setTimeout(connectLive,2000);};es.onopen=()=>{void postPalette();void postScreens(true);};}
+  function fromBoard(e){if(e.source===window.parent&&e.data&&e.data.__pointCode==='live')applyLive(e.data.payload);}
+  if(BOARD)window.addEventListener('message',fromBoard);
+  else{
+    connectLive();
+    setTimeout(()=>{void postPalette();void postScreens(true);},800);
+    // Keep-alive every 4s (captures expire on the host after 12s); otherwise only changes are sent.
+    let beat=0;poll=setInterval(()=>{void postScreens(++beat%3===0);},4000);
+    window.addEventListener('pagehide',()=>{navigator.sendBeacon?.(screensUrl,JSON.stringify({doc:DOC,layers:[]}));});
+  }
 
   async function click(e){if(!active||isUI(e))return;e.preventDefault();e.stopImmediatePropagation();const el=e.composedPath()[0];if(!(el instanceof Element))return;
     resetLive();clearAttr('data-point-picked');picked=el;el.setAttribute('data-point-picked','');
     const payload={tag:el.tagName.toLowerCase(),id:el.id||'',classes:Array.from(el.classList).slice(0,50),text:(el.textContent||'').trim().replace(/\s+/g,' ').slice(0,160),ownText:ownText(el),source:source(el)};
     try{payload.inspect=inspect(el,(el.textContent||'').replace(/\s+/g,' '));}catch(err){payload.inspect={error:String(err&&err.message||err)};}
     toggle(false);status.textContent='소스 연결 중…';
-    try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload),signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();status.textContent='선택 전달 완료';}catch{status.textContent='연결 실패 · Point Code: Start 실행 확인';}
+    try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload),signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();status.textContent='선택 전달 완료';}catch{status.textContent='연결 실패 · Point Code: 시작 실행 확인';}
   }
   // Menus and dropdowns often react to pointerdown/mousedown, before click is dispatched.
   function block(e){if(active&&!isUI(e)){e.preventDefault();e.stopImmediatePropagation();}}
   const blocked=['pointerdown','mousedown','pointerup','mouseup'];
   function key(e){if(e.key==='Escape')toggle(false);if(e.altKey&&e.shiftKey&&e.code==='KeyP'){e.preventDefault();toggle(!active);}}
   function hide(){box.style.display=label.style.display='none';}
-  window.addEventListener('pointermove',move,true);window.addEventListener('click',click,true);window.addEventListener('keydown',key,true);window.addEventListener('scroll',hide,true);window.addEventListener('resize',hide);
-  for(const t of blocked)window.addEventListener(t,block,{capture:true,passive:false});
-  window.__pointCodeCleanup=()=>{es?.close();clearTimeout(esTimer);resetLive();clearAttr('data-point-picked');liveStyle.remove();liveMark.remove();host.remove();window.removeEventListener('pointermove',move,true);window.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);window.removeEventListener('scroll',hide,true);window.removeEventListener('resize',hide);for(const t of blocked)window.removeEventListener(t,block,true);};
+  if(!BOARD){
+    window.addEventListener('pointermove',move,true);window.addEventListener('click',click,true);window.addEventListener('keydown',key,true);window.addEventListener('scroll',hide,true);window.addEventListener('resize',hide);
+    for(const t of blocked)window.addEventListener(t,block,{capture:true,passive:false});
+  }
+  window.__pointCodeCleanup=()=>{es?.close();clearTimeout(esTimer);clearInterval(poll);window.removeEventListener('message',fromBoard);resetLive();clearAttr('data-point-picked');liveStyle.remove();liveMark.remove();host.remove();window.removeEventListener('pointermove',move,true);window.removeEventListener('click',click,true);window.removeEventListener('keydown',key,true);window.removeEventListener('scroll',hide,true);window.removeEventListener('resize',hide);for(const t of blocked)window.removeEventListener(t,block,true);};
 })();

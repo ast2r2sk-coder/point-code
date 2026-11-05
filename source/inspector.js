@@ -1,9 +1,9 @@
 'use strict';
 const vscode = require('vscode');
 const crypto = require('crypto');
-const {EXCLUDE,safeSource,selectorClasses,locateSelector,nearUsage,setDeclaration,setVariable,swapUtility,replaceClass,replaceText,setInlineStyle} = require('./core');
+const {EXCLUDE,safeSource,selectorClasses,locateSelector,nearUsage,setDeclaration,swapUtility,replaceClass,replaceText,setInlineStyle,serial} = require('./core');
+const {readDoc,writeDoc,savedNote,persistToken,CSS_GLOB} = require('./workspace-io');
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const decoder = new TextDecoder();
 // Payload comes from the page; everything is clipped and later rendered with textContent only.
 const arr = (v,n) => Array.isArray(v) ? v.slice(0,n) : [];
 const str = (v,n=400) => typeof v==='string' ? v.slice(0,n) : '';
@@ -20,12 +20,14 @@ const okProp = p => typeof p==='string' && /^-{0,2}[\w-]+$/.test(p);
 const broadSel = sel => {const s=(sel||'').split(',')[0].trim();return /^(html|body|:root|\*|html body)$/i.test(s) || /^\*/.test(sel||'');};
 
 function createInspector(context, deps) {
-  let view, data, targets = [], gen = 0, snap = emptySnap();
+  // Targets per selection: edits queued for an earlier element still save to that element's source.
+  let view, data, gen = 0, snap = emptySnap();
+  const targetsBySel = new Map(), queue = serial();
   const post = () => view?.webview.postMessage({type:'data',data});
   const status = (kind, message) => view?.webview.postMessage({type:'status',kind,message});
   function emptySnap() {return {css:[],tokens:[],text:null,highlight:null};}
-  function sendLive() {deps.live?.(snap);}
-  function resetLive() {snap = emptySnap();deps.live?.({reset:true});}
+  function sendLive() {deps.live?.({channel:'inspector',...snap});}
+  function resetLive() {snap = emptySnap();deps.live?.({channel:'inspector',reset:true});}
 
   async function search(glob, find, title) {
     const files = await vscode.workspace.findFiles(glob,EXCLUDE,1200);
@@ -58,9 +60,9 @@ function createInspector(context, deps) {
   const findSelector = (selector,nest) => search('**/*.{css,scss,sass,less,styl,vue,svelte}',lines=>{const n=locateSelector(lines,selector,nest);return n?[n]:[];},selector+' 규칙');
   async function locateUnique(selector, nest) {
     if(!selector) return null;
-    const files = await vscode.workspace.findFiles('**/*.{css,scss,sass,less,styl,vue,svelte}',EXCLUDE,400);
+    const files = await vscode.workspace.findFiles(CSS_GLOB,EXCLUDE,400);
     const hits = [];
-    for(let i=0;i<files.length && hits.length<3;i++) {
+    for(let i=0;i<files.length && hits.length<2;i++) {
       try {
         if((await vscode.workspace.fs.stat(files[i])).size>500000) continue;
         const lines = await deps.readLines(files[i]);
@@ -69,46 +71,6 @@ function createInspector(context, deps) {
       } catch {}
     }
     return hits.length===1 ? hits[0] : null;
-  }
-
-  const raws = new Map();
-  const readRaw = async file => {if(!raws.has(file)) raws.set(file, decoder.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(file))));return raws.get(file);};
-  async function writeText(file, text) {
-    const uri = vscode.Uri.file(file);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    if(doc.getText() === text) return;
-    const we = new vscode.WorkspaceEdit();
-    const last = doc.lineAt(Math.max(0, doc.lineCount-1));
-    we.replace(uri, new vscode.Range(new vscode.Position(0,0), last.range.end), text);
-    if(!(await vscode.workspace.applyEdit(we))) throw Error('파일에 적용하지 못했습니다');
-    await doc.save();
-    raws.delete(file);
-  }
-
-  async function persistToken(name, value, hintFile, resolveFile) {
-    const attempt = async file => {
-      const f = typeof file==='string' ? await resolveFile(file) : file;
-      if(!f?.file) return null;
-      const r = setVariable(await readRaw(f.file), name, value);
-      if(!r) return null;
-      await writeText(f.file, r.text);
-      return vscode.workspace.asRelativePath(f.file)+':'+r.line+' · '+name;
-    };
-    if(hintFile) {const hit = await attempt(hintFile); if(hit) return hit;}
-    const files = await vscode.workspace.findFiles('**/*.{css,scss,sass,less,styl,vue,svelte}',EXCLUDE,400);
-    const hits = [];
-    for(let i=0;i<files.length && hits.length<8;i++) {
-      try {
-        if((await vscode.workspace.fs.stat(files[i])).size>500000) continue;
-        const raw = decoder.decode(await vscode.workspace.fs.readFile(files[i]));
-        if(!raw.includes(name)) continue;
-        const r = setVariable(raw, name, value);
-        if(r) hits.push({file:files[i].fsPath, ...r});
-      } catch {}
-    }
-    if(hits.length!==1) return null;
-    await writeText(hits[0].file, hits[0].text);
-    return vscode.workspace.asRelativePath(hits[0].file)+':'+hits[0].line+' · '+name;
   }
 
   function applyPreview(m) {
@@ -132,70 +94,71 @@ function createInspector(context, deps) {
   }
 
   async function persist(m, resolveFile) {
+    const targets = targetsBySel.get(m.selId) || [];
     const value = okVal(m.value);
     if(!value) return {error:'값이 올바르지 않습니다'};
     const mode = m.mode;
     if(mode==='text') {
       const t = targets[m.id];
       if(!t?.source) return {error:'텍스트 위치를 모릅니다. 미리보기만 적용됐습니다.'};
-      const r = replaceText(await readRaw(t.source.file), t.source.line, str(m.old,160), value, t.source.file);
+      const r = replaceText(await readDoc(t.source.file), t.source.line, str(m.old,160), value, t.source.file);
       if(!r) return {error:'소스에서 문구를 찾지 못했습니다. 미리보기는 유지됩니다.'};
       if(r.error) return {error:r.error};
-      await writeText(t.source.file, r.text);
+      const w = await writeDoc(t.source.file, r.text);
       t.source = {...t.source, line:r.line};
-      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' 저장'};
+      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' 저장'+savedNote(w)};
     }
     if(mode==='token') {
       const name = m.token;
       if(!okProp(name) || !name.startsWith('--')) return {error:'토큰 이름이 올바르지 않습니다'};
-      const written = await persistToken(name, value, str(m.file,500)||null, resolveFile);
-      if(!written) return {error:'토큰 정의('+name+')를 소스에서 단정하지 못했습니다. 미리보기는 유지됩니다.'};
+      const written = await persistToken(name, value, {hintFile:str(m.file,500)||null, selector:str(m.tokenSel,200)||null, resolveFile});
+      if(!written) return {error:'토큰 '+name+' 정의가 여러 곳에 있거나 없어 저장할 위치를 정하지 못했습니다'};
       return {message:written+' 저장'};
     }
     const t = targets[m.id], prop = okProp(m.prop) && m.prop;
     if(!prop || !t) return {error:'이 속성은 소스에 연결되지 않았습니다. 미리보기는 유지됩니다.'};
     if(t.inline || mode==='inline') {
       if(!t.source) return {error:'인라인 스타일 위치를 모릅니다'};
-      const r = setInlineStyle(await readRaw(t.source.file), t.source.line, prop, value, t.source.file);
+      const r = setInlineStyle(await readDoc(t.source.file), t.source.line, prop, value, t.source.file);
       if(!r) return {error:'인라인 style 리터럴을 찾지 못했습니다'};
-      await writeText(t.source.file, r.text);
-      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' 저장'};
+      const w = await writeDoc(t.source.file, r.text);
+      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' 저장'+savedNote(w)};
     }
     if(t.utility || mode==='utility') {
       if(!t.cls || !t.source) return {error:'className 위치를 모릅니다'};
       const next = swapUtility(t.cls, str(m.old,300), value, prop);
       if(!next) return {error:'이 유틸리티 클래스는 자동으로 바꾸지 못했습니다'};
-      const r = replaceClass(await readRaw(t.source.file), t.source.line, t.cls, next);
+      const r = replaceClass(await readDoc(t.source.file), t.source.line, t.cls, next);
       if(!r) return {error:'소스에서 클래스 '+t.cls+' 를 찾지 못했습니다'};
-      await writeText(t.source.file, r.text);
+      const w = await writeDoc(t.source.file, r.text);
       t.cls = next;
       t.source = {...t.source, line:r.line};
-      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' · '+next};
+      return {message:vscode.workspace.asRelativePath(t.source.file)+':'+r.line+' · '+next+savedNote(w)};
     }
     if(!t.source && (t.selector || m.selector)) {
       const found = await locateUnique(t.selector || m.selector, t.nest || m.nest);
       if(found) t.source = found;
     }
     if(!t.source) return {error:'소스 CSS를 찾지 못함 · 화면만 변경됨. Next/번들 CSS는 원본 파일이 아닙니다. Tailwind면 className이 있는 요소를 고르세요.', previewOnly:true};
-    const next = setDeclaration(await readRaw(t.source.file), t.source.line, prop, value);
+    const next = setDeclaration(await readDoc(t.source.file), t.source.line, prop, value);
     if(!next) return {error:'규칙 블록을 찾지 못했습니다'};
-    await writeText(t.source.file, next);
-    return {message:vscode.workspace.asRelativePath(t.source.file)+':'+t.source.line+' 저장'};
+    const w = await writeDoc(t.source.file, next);
+    return {message:vscode.workspace.asRelativePath(t.source.file)+':'+t.source.line+' 저장'+savedNote(w)};
   }
 
   async function onMessage(m) {
     try {
       if(m?.type==='ready') return post();
       if(m?.type==='styles') return deps.styles();
-      if(m?.type==='preview' || m?.type==='edit') {
-        applyPreview(m);
-        if(m.type==='preview') return status('preview','화면 미리보기 · 아직 파일에는 안 넣었습니다. 아래 ‘소스에 저장’을 누르세요.');
-        const my = gen;
-        const result = await persist(m, async file => (await safeSource((vscode.workspace.workspaceFolders||[]).map(f=>f.uri.fsPath),{file}))||(await deps.bySuffix((vscode.workspace.workspaceFolders||[]).map(f=>f.uri.fsPath),{file})));
-        if(my!==gen) return;
-        return status(result.error?'error':'saved', result.error||result.message);
+      if(m?.type==='open-palette') return vscode.commands.executeCommand('pointCode.openPalette');
+      if(m?.type==='open-screens') return vscode.commands.executeCommand('pointCode.openScreens');
+      if(m?.type==='preview') {
+        if(m.selId===data?.sel) applyPreview(m);
+        return status('preview','화면 미리보기 · 아직 파일에는 안 넣었습니다. 아래 ‘소스에 저장’을 누르세요.');
       }
-      const t = m?.type==='open' && targets[m.id];
+      // One message per save; items run one after another so edits to the same file build on each other.
+      if(m?.type==='save' && Array.isArray(m.items)) return queue(()=>saveItems(m.items.slice(0,100)));
+      const t = m?.type==='open' && (targetsBySel.get(data?.sel)||[])[m.id];
       if(!t) return;
       if(t.source) await deps.openSource(t.source);
       else if(t.search) await deps.candidates();
@@ -205,10 +168,25 @@ function createInspector(context, deps) {
     } catch(e) {vscode.window.showErrorMessage('Point Code: '+e.message);status('error', e.message);}
   }
 
+  const roots = () => (vscode.workspace.workspaceFolders||[]).map(f=>f.uri.fsPath);
+  const resolveAny = async file => (await safeSource(roots(),{file}))||(await deps.bySuffix(roots(),{file}));
+  async function saveItems(items) {
+    const results = [];
+    for(const m of items) {
+      let r;
+      try {r = await persist(m, resolveAny);} catch(e) {r = {error:e.message};}
+      results.push({key:str(m.key,200), ok:!r.error, message:r.error||r.message});
+    }
+    const ok = results.filter(r=>r.ok), fail = results.filter(r=>!r.ok);
+    const kind = !fail.length ? 'saved' : ok.length ? 'warn' : 'error';
+    const message = !fail.length ? (ok.length===1 ? ok[0].message : ok.length+'개 저장 · '+ok.map(r=>r.message.split(' · ')[0]).slice(0,3).join(', '))
+      : (ok.length ? ok.length+'개 저장, ' : '')+fail.length+'개는 미리보기만 — '+fail[0].message;
+    view?.webview.postMessage({type:'save-result',kind,message,results});
+  }
+
   async function update(el, element, isCurrent) {
     const my = ++gen;
     resetLive();
-    raws.clear();
     const ins = el.inspect && typeof el.inspect==='object' ? el.inspect : {};
     const roots = (vscode.workspace.workspaceFolders||[]).map(f=>f.uri.fsPath);
     const next = [], add = t => next.push(t)-1, rel = f => vscode.workspace.asRelativePath(f);
@@ -249,7 +227,8 @@ function createInspector(context, deps) {
           const src = next[ownerL.id]?.source;
           return {label:'className 유틸리티 → '+(r.from?'부모 ':'')+'요소 위치',id:add({source:src,utility:true,cls:cls[0]}),utility:true,save:!!src};
         }
-        return {label:rel(f.file)+' (줄 못 찾음)',id:add({source:{file:f.file,line:1,column:1}}),save:true};
+        // The file is known but the rule is not: never fall back to line 1 (that would edit whichever rule comes first).
+        return {label:rel(f.file)+' (규칙 위치 못 찾음)',id:add({selector:r.selector,nest:r.nest}),save:false};
       }
       if(utility) {
         const ownerL = await ownerLoc(r);
@@ -260,6 +239,7 @@ function createInspector(context, deps) {
     }
     const withLoc = async list => {const out = [];for(const {fromClasses,fromSource,...r} of list) out.push({...r,base:isBase(r.selector),loc:await ruleLoc({...r,fromClasses,fromSource})});return out;};
     const result = {
+      sel:my,
       el:{tag:str(el.tag,40),id:str(el.id,120),classes,text:str(el.text,160),ownText:str(el.ownText,160)},
       element:elementLoc, components,
       rules:await withLoc(arr(ins.rules,60).map(cleanRule)),
@@ -274,7 +254,9 @@ function createInspector(context, deps) {
       error:str(ins.error,200)
     };
     if(!isCurrent() || my!==gen) return;
-    targets = next; data = result;
+    targetsBySel.set(my,next);
+    for(const k of targetsBySel.keys()) if(k < my-2) targetsBySel.delete(k);
+    data = result;
     if(view) {view.show?.(true);post();}
     else await vscode.commands.executeCommand('pointCode.inspector.focus');
   }
