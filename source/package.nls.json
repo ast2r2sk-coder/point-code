@@ -13,5 +13,6 @@
   "cmd.stop": "Stop",
   "view.inspector": "Element Inspector",
   "view.palette": "Design System",
-  "view.screens": "Screens"
+  "view.screens": "Screens",
+  "cmd.undoSave": "Undo Last Save to Source"
 }

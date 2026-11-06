@@ -1,0 +1,140 @@
+/*
+ * Point Code design tokens: the only file that holds raw design values.
+ * View stylesheets (inspector-view, palette-view, screens-view, preview) refer to roles below and never to
+ * hex colors or one-off sizes; test/styles.test.js enforces that.
+ * Colors follow the VS Code theme (light, dark, high contrast); structure follows Apple's HIG:
+ * a 4pt spacing grid, a short type scale, filled surfaces with hairline separators instead of boxes,
+ * one filled action per area, segmented controls and translucent sticky bars.
+ */
+:root{
+  /* Spacing (4pt grid) */
+  --pc-space-0:2px;--pc-space-1:4px;--pc-space-2:8px;--pc-space-3:12px;--pc-space-4:16px;
+  --pc-space-5:20px;--pc-space-6:24px;--pc-space-7:32px;--pc-space-8:48px;
+
+  /* Corner radius */
+  --pc-radius-xs:4px;--pc-radius-sm:6px;--pc-radius-md:8px;--pc-radius-lg:12px;--pc-radius-xl:16px;--pc-radius-pill:999px;
+
+  /* Type */
+  --pc-font:var(--vscode-font-family,-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif);
+  --pc-mono:var(--vscode-editor-font-family,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);
+  --pc-size-largetitle:26px;--pc-size-title:20px;--pc-size-title2:17px;--pc-size-headline:13px;
+  --pc-size-body:13px;--pc-size-callout:12px;--pc-size-footnote:11px;--pc-size-caption:10px;
+  --pc-weight-regular:400;--pc-weight-medium:500;--pc-weight-semibold:600;--pc-weight-bold:700;
+  --pc-leading:1.45;--pc-leading-tight:1.2;
+  --pc-tracking-title:-0.02em;--pc-tracking-eyebrow:0.06em;
+
+  /* Controls */
+  --pc-control-h:28px;--pc-control-h-sm:22px;--pc-hairline:1px;
+
+  /* Color roles (from the VS Code theme; fallbacks live only here) */
+  --pc-bg:var(--vscode-editor-background,#1e1e1e);
+  --pc-bg-side:var(--vscode-sideBar-background,var(--pc-bg));
+  --pc-label:var(--vscode-foreground,#cccccc);
+  --pc-label-2:color-mix(in srgb,var(--pc-label) 68%,transparent);
+  --pc-label-3:color-mix(in srgb,var(--pc-label) 45%,transparent);
+  --pc-fill:color-mix(in srgb,var(--pc-label) 5%,transparent);
+  --pc-fill-2:color-mix(in srgb,var(--pc-label) 9%,transparent);
+  --pc-fill-3:color-mix(in srgb,var(--pc-label) 15%,transparent);
+  --pc-separator:color-mix(in srgb,var(--pc-label) 12%,transparent);
+  --pc-control-border:transparent;
+  --pc-accent:var(--vscode-button-background,#0a84ff);
+  --pc-accent-fg:var(--vscode-button-foreground,#ffffff);
+  --pc-accent-hover:var(--vscode-button-hoverBackground,var(--pc-accent));
+  --pc-tint:var(--vscode-textLink-foreground,#3794ff);
+  --pc-tint-fill:color-mix(in srgb,var(--pc-tint) 14%,transparent);
+  --pc-success:var(--vscode-testing-iconPassed,#30d158);
+  --pc-warning:var(--vscode-editorWarning-foreground,#ff9f0a);
+  --pc-danger:var(--vscode-errorForeground,#ff453a);
+  --pc-pending:var(--vscode-charts-yellow,#e5b800);
+  --pc-pending-fill:color-mix(in srgb,var(--pc-pending) 12%,transparent);
+  --pc-focus:var(--vscode-focusBorder,var(--pc-tint));
+  --pc-input-bg:var(--vscode-input-background,var(--pc-fill-2));
+  --pc-input-fg:var(--vscode-input-foreground,var(--pc-label));
+  --pc-input-border:var(--vscode-input-border,transparent);
+  --pc-badge-bg:var(--vscode-badge-background,var(--pc-fill-3));
+  --pc-badge-fg:var(--vscode-badge-foreground,var(--pc-label));
+  --pc-seg-on:color-mix(in srgb,var(--pc-label) 18%,var(--pc-bg));
+  --pc-quote:var(--vscode-textBlockQuote-background,var(--pc-fill));
+  --pc-menu-bg:var(--vscode-menu-background,var(--pc-bg));--pc-menu-fg:var(--vscode-menu-foreground,var(--pc-label));
+  --pc-menu-sel-bg:var(--vscode-menu-selectionBackground,var(--pc-fill-2));--pc-menu-sel-fg:var(--vscode-menu-selectionForeground,inherit);
+
+  /* Marks: what kind of thing a line is (inherited from a parent, a design token, a component) */
+  --pc-mark-inherit:var(--vscode-charts-orange,#d18616);
+  --pc-mark-token:var(--vscode-charts-purple,#b180d7);
+  --pc-mark-component:var(--vscode-charts-purple,#b180d7);
+  --pc-syntax-tag:var(--vscode-symbolIcon-classForeground,#4ec9b0);
+  --pc-syntax-selector:var(--vscode-symbolIcon-variableForeground,#9cdcfe);
+  --pc-syntax-prop:var(--vscode-symbolIcon-propertyForeground,#c586c0);
+
+  /* Translucent bars */
+  --pc-bar-bg:color-mix(in srgb,var(--pc-bg) 80%,transparent);
+  --pc-bar-bg-side:color-mix(in srgb,var(--pc-bg-side) 80%,transparent);
+  --pc-bar-blur:saturate(180%) blur(16px);
+
+  /* Elevation and motion */
+  --pc-shadow-1:0 1px 2px rgb(0 0 0 / .14);
+  --pc-shadow-2:0 2px 8px rgb(0 0 0 / .16),0 12px 32px rgb(0 0 0 / .22);
+  --pc-ease:cubic-bezier(.25,.1,.25,1);--pc-dur:160ms;
+
+  /* Board and preview stage: always a dark canvas so screens read like artboards */
+  --pc-canvas:#1c1c1e;--pc-canvas-grid:#2a2a2d;--pc-canvas-label:#f5f5f7;--pc-canvas-label-2:#a1a1a6;
+  --pc-canvas-fill:rgb(255 255 255 / .08);--pc-canvas-fill-2:rgb(255 255 255 / .14);--pc-canvas-separator:rgb(255 255 255 / .12);
+  --pc-canvas-input:rgb(0 0 0 / .3);
+  --pc-canvas-accent:#0a84ff;--pc-canvas-snapshot:#64d2ff;--pc-canvas-layer:#ff9f0a;
+  --pc-artboard:#ffffff;--pc-artboard-shadow:0 0 0 1px rgb(0 0 0 / .4),0 16px 48px rgb(0 0 0 / .45);
+}
+/* Light themes: the selected segment is a raised white thumb (as on macOS / iOS). */
+body.vscode-light{--pc-seg-on:var(--pc-bg);--pc-shadow-1:0 1px 2px rgb(0 0 0 / .1),0 0 0 .5px rgb(0 0 0 / .06)}
+/* High contrast: no translucent fills; every control gets the theme's contrast border. */
+body.vscode-high-contrast,body.vscode-high-contrast-light{
+  --pc-fill:transparent;--pc-fill-2:transparent;--pc-fill-3:transparent;
+  --pc-separator:var(--vscode-contrastBorder,currentColor);--pc-control-border:var(--vscode-contrastBorder,currentColor);
+  --pc-bar-bg:var(--pc-bg);--pc-bar-bg-side:var(--pc-bg-side);--pc-seg-on:transparent;
+}
+
+/* ---- Base ---- */
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--pc-font);font-size:var(--pc-size-body);line-height:var(--pc-leading);color:var(--pc-label);background:var(--pc-bg);-webkit-font-smoothing:antialiased}
+[hidden]{display:none!important}
+code{font-family:var(--pc-mono)}
+a{color:var(--pc-tint);text-decoration:none;cursor:pointer}
+a:hover{text-decoration:underline}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--pc-focus);outline-offset:2px}
+
+/* Buttons: gray by default; areas mark their one main action as filled. */
+button{display:inline-flex;align-items:center;justify-content:center;gap:var(--pc-space-1);min-height:var(--pc-control-h);padding:0 var(--pc-space-3);
+  border:var(--pc-hairline) solid var(--pc-control-border);border-radius:var(--pc-radius-md);background:var(--pc-fill-2);color:inherit;
+  font:inherit;font-weight:var(--pc-weight-medium);white-space:nowrap;cursor:pointer;transition:background-color var(--pc-dur) var(--pc-ease),opacity var(--pc-dur) var(--pc-ease)}
+button:hover{background:var(--pc-fill-3)}
+button:active{opacity:.7}
+button:disabled{opacity:.4;cursor:default;background:var(--pc-fill-2)}
+.pc-filled{background:var(--pc-accent);color:var(--pc-accent-fg)}
+.pc-filled:hover{background:var(--pc-accent-hover)}
+.pc-filled:disabled{background:var(--pc-accent)}
+.pc-plain{background:transparent;color:var(--pc-tint)}
+.pc-plain:hover{background:var(--pc-tint-fill)}
+
+/* Segmented control: a track with a raised thumb on the chosen segment. */
+.pc-seg{display:inline-flex;flex-wrap:wrap;gap:var(--pc-space-0);padding:var(--pc-space-0);border-radius:var(--pc-radius-md);background:var(--pc-fill-2)}
+.pc-seg>button{min-height:var(--pc-control-h-sm);padding:0 var(--pc-space-3);border-radius:var(--pc-radius-sm);background:transparent;color:var(--pc-label-2);font-size:var(--pc-size-callout)}
+.pc-seg>button:hover{color:var(--pc-label);background:transparent}
+.pc-seg>button.on{background:var(--pc-seg-on);color:var(--pc-label);box-shadow:var(--pc-shadow-1)}
+
+/* Fields */
+input[type=text],input[type=search],input:not([type]),textarea{font:inherit;color:var(--pc-input-fg);background:var(--pc-input-bg);
+  border:var(--pc-hairline) solid var(--pc-input-border);border-radius:var(--pc-radius-sm);padding:var(--pc-space-1) var(--pc-space-2);min-height:var(--pc-control-h-sm)}
+input[type=text]:focus-visible,input[type=search]:focus-visible,input:not([type]):focus-visible{outline-offset:0}
+input[type=color]{inline-size:var(--pc-control-h-sm);block-size:var(--pc-control-h-sm);padding:0;border:0;border-radius:var(--pc-radius-xs);background:transparent;cursor:pointer}
+input[type=range]{accent-color:var(--pc-accent)}
+
+/* Status line: saved / warn / error / preview */
+.status{color:var(--pc-label-2);font-size:var(--pc-size-callout)}
+.status.saved{color:var(--pc-success)}
+.status.warn,.status.error{color:var(--pc-danger)}
+.status.preview{color:var(--pc-pending)}
+
+/* Translucent sticky bar */
+.pc-bar{background:var(--pc-bar-bg);-webkit-backdrop-filter:var(--pc-bar-blur);backdrop-filter:var(--pc-bar-blur)}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

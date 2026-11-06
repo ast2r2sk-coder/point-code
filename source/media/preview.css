@@ -1,0 +1,36 @@
+/* Preview panel: one toolbar over a dark stage. Values come from tokens.css; this file only arranges them. */
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* Toolbar: brand · devices (segmented) · … · actions */
+.bar{position:relative;z-index:2;display:flex;flex-wrap:wrap;gap:var(--pc-space-2);align-items:center;padding:var(--pc-space-2) var(--pc-space-3);
+  border-bottom:var(--pc-hairline) solid var(--pc-separator)}
+.brand{margin-right:var(--pc-space-2);font-size:var(--pc-size-headline);font-weight:var(--pc-weight-semibold);letter-spacing:var(--pc-tracking-title)}
+.spacer{flex:1}
+.divider{inline-size:var(--pc-hairline);block-size:16px;background:var(--pc-separator)}
+.icon{min-width:var(--pc-control-h);padding:0;font-size:var(--pc-size-body)}
+
+/* "More" menu for rarely used actions */
+.more{position:relative}
+.more>summary{display:inline-flex;align-items:center;justify-content:center;min-width:var(--pc-control-h);min-height:var(--pc-control-h);border-radius:var(--pc-radius-md);
+  background:var(--pc-fill-2);list-style:none;cursor:pointer;font-weight:var(--pc-weight-bold);letter-spacing:.1em}
+.more>summary::-webkit-details-marker{display:none}
+.more>summary:hover{background:var(--pc-fill-3)}
+.more[open]>summary{background:var(--pc-fill-3)}
+.menu{position:absolute;right:0;top:calc(100% + var(--pc-space-1));display:flex;flex-direction:column;min-width:160px;padding:var(--pc-space-1);
+  border-radius:var(--pc-radius-md);background:var(--pc-menu-bg);color:var(--pc-menu-fg);box-shadow:var(--pc-shadow-2)}
+.menu button{justify-content:flex-start;background:transparent;font-weight:var(--pc-weight-regular)}
+.menu button:hover{background:var(--pc-menu-sel-bg);color:var(--pc-menu-sel-fg)}
+
+/* One quiet line of help; can be dismissed */
+.help{display:flex;gap:var(--pc-space-2);align-items:center;padding:var(--pc-space-1) var(--pc-space-3);border-bottom:var(--pc-hairline) solid var(--pc-separator);
+  color:var(--pc-label-2);font-size:var(--pc-size-footnote)}
+.help b{color:var(--pc-label);font-weight:var(--pc-weight-semibold)}
+.help code{font-size:var(--pc-size-footnote)}
+.help .close{margin-left:auto;min-height:var(--pc-control-h-sm);min-width:var(--pc-control-h-sm);padding:0;background:transparent;color:var(--pc-label-2)}
+.help .close:hover{background:var(--pc-fill-2)}
+
+/* Stage */
+.stage{flex:1;min-height:0;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:var(--pc-space-3);background:var(--pc-canvas)}
+.frame-shell{inline-size:100%;block-size:100%;overflow:hidden;background:var(--pc-artboard);box-shadow:var(--pc-artboard-shadow)}
+.frame-shell.device{border-radius:var(--pc-radius-md)}
+iframe{display:block;inline-size:100%;block-size:100%;border:0;background:var(--pc-artboard)}

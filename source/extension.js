@@ -10,9 +10,11 @@ const {createInspector} = require('./inspector');
 const {createPalette} = require('./palette');
 const {createScreens} = require('./screens');
 const {DEVICES} = require('./devices');
+const io = require('./workspace-io');
+const SNAPSHOT_LIMIT = 8*1024*1024;
 const PREFIX = '/__point_code__/';
 const STATE = 'pointCode.session';
-let session, panel, selected, generation = 0, pickCancel, inspector, palette, screens, pendingFocus;
+let mediaUri, session, panel, selected, generation = 0, pickCancel, inspector, palette, screens, pendingFocus;
 const decoder = new TextDecoder();
 const escape = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const readLines = async uri => decoder.decode(await vscode.workspace.fs.readFile(uri)).split(/\r?\n/);
@@ -153,10 +155,32 @@ function handle(s, req, res) {
         palette?.update(data.tokens);
       } else {
         if(data.layers!=null && !Array.isArray(data.layers)) throw Error();
-        screens?.setCaptures(typeof data.doc==='string'?data.doc:null,data.layers||[]);
+        if(data.links!=null && !Array.isArray(data.links)) throw Error();
+        void screens?.setCaptures(typeof data.doc==='string'?data.doc:null,data.layers||[],data.links||[]);
       }
       res.writeHead(204);res.end();
     }catch {res.writeHead(400);res.end();}});
+    return;
+  }
+  // "화면 담기": the page posts its DOM (scripts already removed); served back to Screens board frames with only the picker attached.
+  if(endpoint.pathname===PREFIX+'snapshot' && req.method==='POST' && origin) {
+    const chunks=[];let size=0;
+    req.on('data',chunk=>{size+=chunk.length;if(size>SNAPSHOT_LIMIT){res.writeHead(413);res.end();req.destroy();}else chunks.push(chunk);});
+    req.on('end',async()=>{try {
+      const data=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if(typeof data.html!=='string' || !/^<!doctype html>/i.test(data.html)) throw Error();
+      const id=await screens.addSnapshot(data);
+      res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({id}));
+    }catch {if(!res.headersSent){res.writeHead(400);res.end();}}});
+    return;
+  }
+  const snap=endpoint.pathname.match(/^\/__point_code__\/snap\/([0-9a-f]{16})\.html$/);
+  if(snap && req.method==='GET') {
+    void screens?.snapshotHtml(snap[1]).then(html=>{
+      if(html==null){res.writeHead(404);return res.end();}
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
+      res.end(html+'\n<script src="'+s.base+PREFIX+'picker.js?token='+s.token+'"></script>\n');
+    });
     return;
   }
   if(endpoint.pathname!==PREFIX+'select' || req.method!=='POST' || !origin) {res.writeHead(403);return res.end();}
@@ -204,8 +228,8 @@ async function connect(context) {
 }
 function openPreview(s) {
   if(panel) return panel.reveal(vscode.ViewColumn.One);
-  panel = vscode.window.createWebviewPanel('pointCode','Point Code',vscode.ViewColumn.One,{enableScripts:true,retainContextWhenHidden:true,localResourceRoots:[]});
-  panel.webview.html = previewHtml(s);
+  panel = vscode.window.createWebviewPanel('pointCode','Point Code',vscode.ViewColumn.One,{enableScripts:true,retainContextWhenHidden:true,localResourceRoots:[mediaUri]});
+  panel.webview.html = previewHtml(s, panel.webview);
   panel.webview.onDidReceiveMessage(m=>{
     if(m.type==='url') void copyProxyUrl();
     if(m.type==='copy') void copyScript();
@@ -224,50 +248,41 @@ function showInPreview(route, selector) {
   panel?.webview.postMessage({type:'navigate',route});
 }
 let broadcast = () => {};
-function previewHtml(s) {
+function previewHtml(s, webview) {
   const nonce = crypto.randomBytes(16).toString('hex');
   const src = escape(pageUrl(s));
   const app = escape(s.target.href);
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${escape(s.base)}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';"><style>
-body{padding:0;margin:0;font:13px system-ui;background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);display:flex;flex-direction:column;height:100vh}
-.bar{padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--vscode-panel-border,#8884)}
-.bar strong{margin-right:4px}
-button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;padding:6px 10px;cursor:pointer;border-radius:4px;font:inherit}
-button.ghost{background:transparent;color:inherit;border:1px solid var(--vscode-widget-border,#8884)}
-button.chip{background:var(--vscode-editorWidget-background);color:inherit;border:1px solid var(--vscode-widget-border,#8884);padding:4px 8px;font-size:12px;border-radius:999px}
-button.chip.on{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-color:transparent}
-.help{padding:8px 12px;font-size:12px;line-height:1.5;opacity:.9;border-bottom:1px solid var(--vscode-panel-border,#8884);background:var(--vscode-textBlockQuote-background,transparent)}
-.help b{opacity:1}
-.devices{padding:8px 12px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;border-bottom:1px solid var(--vscode-panel-border,#8884)}
-.devices .lbl{font-size:11px;opacity:.65;margin-right:4px}
-.stage{flex:1;min-height:0;overflow:auto;background:#1a1a1a;display:flex;justify-content:center;align-items:flex-start;padding:12px}
-.frame-shell{background:#fff;box-shadow:0 0 0 1px #0003;overflow:hidden;width:100%;height:100%}
-iframe{width:100%;height:100%;border:0;display:block;background:#fff}
-</style></head><body>
-<div class="bar">
-  <strong>Point Code</strong>
+  const css = name => webview?.asWebviewUri ? String(webview.asWebviewUri(vscode.Uri.joinPath(mediaUri,name))) : '';
+  // Styles come from the shared design tokens (media/tokens.css) and media/preview.css; nothing is styled inline.
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${escape(s.base)}; style-src ${webview?.cspSource||"'none'"}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${css('tokens.css')}"><link rel="stylesheet" href="${css('preview.css')}"></head><body>
+<header class="bar pc-bar">
+  <span class="brand">Point Code</span>
+  <div class="pc-seg" id="devices" role="group" aria-label="해상도"></div>
+  <span class="spacer"></span>
+  <button id="snap" title="지금 보이는 화면(열린 모달·탭 포함)을 화면 그리드에 고정합니다">화면 담기</button>
+  <button class="icon" id="reload" title="새로고침" aria-label="새로고침">↻</button>
+  <details class="more"><summary title="더보기" aria-label="더보기">···</summary><div class="menu">
+    <button id="url">프록시 주소 복사</button>
+    <button id="styles">워크스페이스 CSS 후보</button>
+  </div></details>
+  <span class="divider"></span>
   <button id="palette">디자인 시스템</button>
   <button id="screens">화면 그리드</button>
-  <button class="ghost" id="reload">새로고침</button>
-  <button class="ghost" id="url">주소 복사</button>
-  <button class="ghost" id="styles">CSS 후보</button>
-</div>
-<div class="help">
-  <b>미리보기</b> · <code>${app}</code> · 오른쪽 아래 <b>요소 선택</b>(Alt+Shift+P) → 사이드바에서 수정 → <b>소스에 저장</b>
-</div>
-<div class="devices" id="devices"><span class="lbl">해상도</span></div>
-<div class="stage"><div class="frame-shell" id="shell"><iframe id="frame" src="${src}" title="개발 화면" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"></iframe></div></div>
+</header>
+<div class="help" id="help"><span><code>${app}</code> · 오른쪽 아래 <b>요소 선택</b>(Alt+Shift+P) → 사이드바에서 수정 → <b>소스에 저장</b></span><button class="close" id="hideHelp" title="도움말 닫기" aria-label="도움말 닫기">✕</button></div>
+<div class="stage" id="stage"><div class="frame-shell" id="shell"><iframe id="frame" src="${src}" title="개발 화면" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"></iframe></div></div>
 <script nonce="${nonce}">
 const api=acquireVsCodeApi();
-const frame=document.getElementById('frame'),shell=document.getElementById('shell'),devices=document.getElementById('devices');
+const frame=document.getElementById('frame'),shell=document.getElementById('shell'),devices=document.getElementById('devices'),stage=document.getElementById('stage');
 const list=[{id:'full',label:'전체',w:0,h:0}].concat(${JSON.stringify(DEVICES)});
 const origin=${JSON.stringify(s.base)};let route=${JSON.stringify(s.target.pathname+s.target.search+s.target.hash)};
 let cur='full';
 function paint(){
   devices.querySelectorAll('button.chip').forEach(b=>b.classList.toggle('on',b.dataset.id===cur));
   const d=list.find(x=>x.id===cur)||list[0];
+  shell.classList.toggle('device',!!d.w);
   if(!d.w){shell.style.width='100%';shell.style.height='100%';shell.style.maxHeight='none';return;}
-  const maxW=Math.max(200,devices.parentElement.clientWidth-40),maxH=Math.max(200,window.innerHeight-200);
+  const maxW=Math.max(200,stage.clientWidth-24),maxH=Math.max(200,stage.clientHeight-24);
   const scale=Math.min(1,maxW/d.w,maxH/d.h);
   shell.style.width=Math.round(d.w*scale)+'px';
   shell.style.height=Math.round(d.h*scale)+'px';
@@ -280,9 +295,13 @@ for(const d of list){
   devices.append(b);
 }
 window.addEventListener('resize',paint);paint();
+const help=document.getElementById('help'),st=api.getState()||{};help.hidden=!!st.hideHelp;
+document.getElementById('hideHelp').onclick=()=>{help.hidden=true;api.setState({...(api.getState()||{}),hideHelp:true});paint();};
+document.querySelector('.more').addEventListener('click',e=>{if(e.target.closest('.menu button'))e.currentTarget.open=false;});
 for(const id of ['url','styles','palette','screens'])document.getElementById(id).onclick=()=>api.postMessage({type:id});
 document.getElementById('reload').onclick=()=>{frame.src=frame.src;};
 frame.addEventListener('load',()=>api.postMessage({type:'loaded'}));
+document.getElementById('snap').onclick=()=>{try{frame.contentWindow.postMessage({__pointCode:'snapshot'},origin);}catch{}};
 window.addEventListener('message',e=>{
   if(e.data?.type!=='navigate'||typeof e.data.route!=='string')return;
   if(e.data.route===route){api.postMessage({type:'loaded'});return;}
@@ -293,14 +312,18 @@ window.addEventListener('message',e=>{
 async function copyScript(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: 시작을 실행하세요.');await vscode.env.clipboard.writeText(scriptTag(session));vscode.window.showInformationMessage('스크립트 태그를 복사했습니다. 개발용 HTML의 </body> 앞에 넣으세요. 포트·토큰은 이 프로젝트에서 계속 유지됩니다.');}
 async function copyProxyUrl(){if(!session)return vscode.window.showInformationMessage('먼저 Point Code: 시작을 실행하세요.');await vscode.env.clipboard.writeText(pageUrl(session));vscode.window.showInformationMessage('프록시 주소를 복사했습니다: '+pageUrl(session));}
 function activate(context){
+  mediaUri = vscode.Uri.joinPath(context.extensionUri,'media');
   // Previews go to every connected page over SSE, and to the Screens board frames through the board webview.
   const live=payload=>{broadcast(payload);if(payload?.channel)screens?.forward(payload);};
+  // Undo the last "Save to source" (from the inspector, the Design System, or the command); both views refresh their state.
+  const undo=()=>io.exclusive(async()=>{const r=await io.undoLast();inspector?.undone(r);palette?.undone(r);if(r.error)void vscode.window.setStatusBarMessage('Point Code: '+r.error,4000);});
+  const snapshotSrc=id=>session?session.base+PREFIX+'snap/'+id+'.html?token='+session.token:'';
   const targetPort=()=>session?.target.port||'';
   broadcast=payload=>{if(!session)return;const data='data: '+JSON.stringify(payload)+'\n\n';for(const res of session.live){try{res.write(data);}catch{session.live.delete(res);}}};
   const proxyBase=()=>session?.base||'';
-  inspector=createInspector(context,{openSource,bySuffix,readLines,live,candidates:()=>selected&&candidates(selected,false),styles:()=>selected&&candidates(selected,true)});
-  palette=createPalette(context,{openSource,bySuffix,live,proxyBase});
-  screens=createScreens(context,{live,proxyBase,targetPort,showInPreview});
+  inspector=createInspector(context,{openSource,bySuffix,readLines,live,undo,candidates:()=>selected&&candidates(selected,false),styles:()=>selected&&candidates(selected,true)});
+  palette=createPalette(context,{openSource,bySuffix,live,proxyBase,undo});
+  screens=createScreens(context,{live,proxyBase,targetPort,showInPreview,snapshotSrc});
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('pointCode.inspector',inspector.provider,{webviewOptions:{retainContextWhenHidden:true}}),
     vscode.window.registerWebviewViewProvider('pointCode.palette',palette.provider,{webviewOptions:{retainContextWhenHidden:true}}),
@@ -310,7 +333,7 @@ function activate(context){
     start:()=>start(context),changeUrl:()=>connect(context),copyScript,copyProxyUrl,
     styles:()=>selected?candidates(selected,true):vscode.window.showInformationMessage('먼저 페이지 요소를 선택하세요.'),
     stop,['palette.refresh']:()=>palette.refresh(),['screens.refresh']:()=>screens.refresh(),
-    openPalette:()=>palette.reveal(),openScreens:()=>screens.reveal()
+    openPalette:()=>palette.reveal(),openScreens:()=>screens.reveal(),undoSave:undo
   };
   for(const [id,fn] of Object.entries(cmds))context.subscriptions.push(vscode.commands.registerCommand('pointCode.'+id,async()=>{try{await fn();}catch(e){vscode.window.showErrorMessage(e.message);}}));
   context.subscriptions.push({dispose:()=>void stop()});

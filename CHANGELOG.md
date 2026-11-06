@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] — 2026-11-06
+
+### Added
+- **수정 지도 (Edit map) in the Inspector**, for code where the same design decision is scattered or hard-coded:
+  - which rule the element uses and how many elements on the page share it (**화면에서 보기** flashes them);
+  - where its component is used in the project (links);
+  - elements with the same class, and look-alikes (same tag and key styles) defined somewhere else, grouped by where they come from;
+  - hard-coded colors and lengths: **토큰으로 바꾸기** when a token with that value exists; **다른 곳도 찾기** lists every stylesheet copy (and counts copies in JSX/HTML, which are left alone); **토큰 만들고 모두 바꾸기** defines the token in `:root` and replaces every copy in one save — one **되돌리기** restores all files. Lengths only match the same kind of property (an 8px padding is not an 8px font size); token definitions are never rewritten.
+- **배치 (Layout) in the Inspector**: arrange and place elements without knowing CSS property names.
+  - *Inside*: direction (→ / ↓), a 3×3 alignment pad, distribute (pack / space between / evenly) and gap. A plain block becomes a flex box on the first click (and says so).
+  - *In the parent*: left / center / right / fill, and top / center / bottom when the parent is a flex or grid box; otherwise it explains why and points to the parent.
+  - *Text*: left / center / right / justify.
+  - Edits go to the element's own rule (shown, with how many elements share it), or to its Tailwind classes (same-group utilities are replaced, `md:` variants kept). Preview, ↺, cancel, save and undo work as for any other edit.
+- **↑ 부모 / ↓ 자식**: move the selection to the parent or first child from the Inspector.
+
+### Changed
+- **Cleaner UI, modeled on Apple's design guidelines.** Inspector, Design System, Screens board and the preview panel share one spacing grid, type scale and button hierarchy: filled surfaces instead of boxes, one main action per area, segmented controls, translucent sticky bars. Colors still follow the VS Code theme (light, dark, high contrast).
+- **All design values live in `media/tokens.css`**; view stylesheets use its roles only (a test enforces it). The preview toolbar is one row, with rarely used actions under **···** and a dismissible help line.
+
+## [0.7.0] — 2026-11-05
+
+### Added
+- **Cancel** (취소) in the Inspector and the Design System: drop all unsaved edits, or one at a time with **↺** next to a changed field / token. The preview goes back immediately.
+- **Undo the last save** (되돌리기, also `Point Code: Undo Last Save to Source`): reverts every file the last **Save to source** touched, from the Inspector or the Design System. Edits made elsewhere in those files since then are kept; if the saved part itself was changed again, that file is left alone and reported.
+- **Screens for single-page / vanilla JS apps**
+  - Links on the running page (`/about.html`, `#/settings`, `?tab=…`) are collected while you use the preview and added to the board (per app; **빼기** removes one, **찾은 링크 지우기** clears them).
+  - **화면 담기** (Capture screen) in the page toolbar and the preview toolbar pins the current state — open modal, active tab, filled form, scroll position — as a board frame. App scripts are removed so it stays in that state; stylesheets stay live and token / CSS previews still reach it. Captured screens can be renamed, deleted, opened in the preview, and are kept in workspace storage (up to 40).
+  - Layer cards (open modal / toast / drawer) get **이 상태 담기** to capture the page that has the layer open.
+
+### Fixed
+- Design System: a refresh arriving between keystrokes no longer resets the field to an older value.
+
 ## [0.6.0] — 2026-11-05
 
 ### Fixed

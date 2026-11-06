@@ -2,11 +2,14 @@
 const vscode = require('vscode');
 const crypto = require('crypto');
 const path = require('path');
+const fsp = require('fs/promises');
 const {EXCLUDE} = require('./core');
-const {routesFromPaths,withHomeFallback,fillRoute,pickProject,mergeCaptures} = require('./screen-routes');
+const {routesFromPaths,withHomeFallback,fillRoute,pickProject,mergeCaptures,cleanLinks,mergeLinks} = require('./screen-routes');
 const {DEVICES} = require('./devices');
 const decoder = new TextDecoder();
 const PARAMS = 'pointCode.routeParams', PROJECT = 'pointCode.screenProject';
+const LINKS = 'pointCode.links', HIDDEN = 'pointCode.hiddenScreens', SNAPS = 'pointCode.snapshots';
+const SNAP_ID = /^[0-9a-f]{16}$/, MAX_SNAPS = 40;
 const rel = uri => vscode.workspace.asRelativePath(uri,false).replace(/\\/g,'/');
 
 async function discoverProjects() {
@@ -41,13 +44,21 @@ function createScreens(context, deps) {
   const captures = new Map();
   const targets = () => [view, panel].filter(Boolean);
   const params = () => context.workspaceState.get(PARAMS) || {};
+  const ws = (k, d) => context.workspaceState.get(k) || d;
+  const proj = () => project || '';
 
   function list() {
-    const values = params();
-    const pages = withHomeFallback(routes.filter(r=>(r.project||'')===(project||'')), project||'').map(r => r.params?.length
+    const values = params(), hidden = new Set(ws(HIDDEN, []));
+    const pages = withHomeFallback(routes.filter(r=>(r.project||'')===proj()), proj()).map(r => r.params?.length
       ? {...r, values:values[r.id]||{}, route:fillRoute(r.pattern, values[r.id]||{})}
       : r);
-    return [...mergeCaptures(captures, null, []), ...pages];
+    // Links seen on the running page: screens a single-index.html app never has as files.
+    const known = new Set(pages.map(p=>p.route).filter(Boolean));
+    const links = (ws(LINKS, {})[proj()] || []).filter(l=>!known.has(l.route) && !hidden.has('link:'+l.route))
+      .map(l=>({id:'link:'+l.route, label:l.label, route:l.route, pattern:l.route, params:[], kind:'page', origin:'link', project:proj()}));
+    const snaps = ws(SNAPS, []).filter(x=>(x.project||'')===proj())
+      .map(x=>({id:'snap:'+x.id, label:x.label, route:x.route, kind:'snapshot', at:x.at, src:deps.snapshotSrc?.(x.id)||''}));
+    return [...mergeCaptures(captures, null, []), ...snaps, ...pages, ...links];
   }
   function post(force = true) {
     const msg = {type:'screens',base,screens:list(),devices:DEVICES,
@@ -69,20 +80,73 @@ function createScreens(context, deps) {
   }
 
   // Each page reports its own open layers; only that page's entry changes. Unchanged reports do not repaint the board.
-  function setCaptures(doc, layers) {
+  async function setCaptures(doc, layers, links) {
+    const found = cleanLinks(links);
+    if(found.length) {
+      const all = {...ws(LINKS, {})}, next = mergeLinks(all[proj()] || [], found);
+      if(next) {all[proj()] = next; await context.workspaceState.update(LINKS, all); lastPost = '';}
+    }
     const clean = (Array.isArray(layers)?layers:[]).slice(0,40).map((c,i)=>({
       id:'cap:'+String(c.id||i).slice(0,200),
       label:String(c.label||c.kind||'capture').slice(0,80),
       route:String(c.route||'/').slice(0,300),
       kind:['modal','toast','drawer','popover','view'].includes(c.kind)?c.kind:'view',
-      selector:typeof c.selector==='string'?c.selector.slice(0,200):null
+      selector:typeof c.selector==='string'?c.selector.slice(0,200):null,
+      doc:typeof doc==='string'?doc.slice(0,64):null
     }));
     mergeCaptures(captures, typeof doc==='string'?doc.slice(0,64):'legacy', clean);
     post(false);
   }
 
+  // ---- Captured screens ("화면 담기"): the page's DOM at that moment, scripts removed, kept in workspace storage.
+  const snapDir = () => vscode.Uri.joinPath(context.storageUri || context.globalStorageUri, 'snapshots').fsPath;
+  async function addSnapshot(data) {
+    const id = crypto.randomBytes(8).toString('hex');
+    await fsp.mkdir(snapDir(), {recursive:true});
+    await fsp.writeFile(path.join(snapDir(), id+'.html'), data.html, 'utf8');
+    const route = typeof data.route==='string' && data.route.startsWith('/') ? data.route.slice(0,300) : '/';
+    const label = (typeof data.label==='string' && data.label.trim() ? data.label.trim() : route).slice(0,80);
+    const all = [{id, label, route, project:proj(), at:Date.now()}, ...ws(SNAPS, [])];
+    for(const old of all.slice(MAX_SNAPS)) await fsp.unlink(path.join(snapDir(), old.id+'.html')).catch(()=>{});
+    await context.workspaceState.update(SNAPS, all.slice(0, MAX_SNAPS));
+    post();
+    return id;
+  }
+  async function snapshotHtml(id) {
+    if(!SNAP_ID.test(id) || !ws(SNAPS, []).some(x=>x.id===id)) return null;
+    return fsp.readFile(path.join(snapDir(), id+'.html'), 'utf8').catch(()=>null);
+  }
+  async function removeScreen(id) {
+    if(id.startsWith('snap:')) {
+      const sid = id.slice(5);
+      await context.workspaceState.update(SNAPS, ws(SNAPS, []).filter(x=>x.id!==sid));
+      if(SNAP_ID.test(sid)) await fsp.unlink(path.join(snapDir(), sid+'.html')).catch(()=>{});
+    } else if(id.startsWith('link:')) {
+      await context.workspaceState.update(HIDDEN, [...new Set([...ws(HIDDEN, []), id])].slice(-200));
+    }
+    post();
+  }
+  async function renameSnapshot(id) {
+    const sid = id.slice(5), all = ws(SNAPS, []), item = all.find(x=>x.id===sid);
+    if(!item) return;
+    const label = await vscode.window.showInputBox({title:'담은 화면 이름', value:item.label, validateInput:v=>v.trim()?null:'이름을 입력하세요'});
+    if(!label) return;
+    await context.workspaceState.update(SNAPS, all.map(x=>x.id===sid ? {...x, label:label.trim().slice(0,80)} : x));
+    post();
+  }
+
   async function onMessage(m) {
     try {
+      if(m?.type==='remove' && typeof m.id==='string') return removeScreen(m.id.slice(0,400));
+      if(m?.type==='rename' && typeof m.id==='string' && m.id.startsWith('snap:')) return renameSnapshot(m.id);
+      // Ask the page that has this layer open to capture itself.
+      if(m?.type==='capture' && typeof m.doc==='string') return deps.live?.({snapshot:{doc:m.doc.slice(0,64)}});
+      if(m?.type==='reset-links') {
+        const all = {...ws(LINKS, {})}; delete all[proj()];
+        await context.workspaceState.update(LINKS, all);
+        await context.workspaceState.update(HIDDEN, ws(HIDDEN, []).filter(id=>!id.startsWith('link:')));
+        return post();
+      }
       if(m?.type==='ready') return post();
       if(m?.type==='refresh') {
         deps.live?.({pullScreens:true});
@@ -116,7 +180,7 @@ function createScreens(context, deps) {
     const uri = name => webview.asWebviewUri(vscode.Uri.joinPath(media,name));
     const origin = (()=>{try{return deps.proxyBase?.()?new URL(deps.proxyBase()).origin:'';}catch{return '';}})();
     const frame = origin || 'http://127.0.0.1:* http://localhost:*';
-    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; frame-src ${frame} ${webview.cspSource};"><link rel="stylesheet" href="${uri('screens-view.css')}"></head><body class="board"><div id="root"></div><script nonce="${nonce}" src="${uri('screens-view.js')}"></script></body></html>`;
+    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; frame-src ${frame} ${webview.cspSource};"><link rel="stylesheet" href="${uri('tokens.css')}"><link rel="stylesheet" href="${uri('screens-view.css')}"></head><body class="board"><div id="root"></div><script nonce="${nonce}" src="${uri('screens-view.js')}"></script></body></html>`;
   }
 
   function paintTarget(t) {
@@ -158,6 +222,8 @@ function createScreens(context, deps) {
     refresh,
     reveal,
     setCaptures,
+    addSnapshot,
+    snapshotHtml,
     // Board frames have no SSE connection of their own (browsers allow ~6 per host); live previews arrive through the board webview.
     forward:payload=>{for(const t of targets()) t.webview.postMessage({type:'live',payload});},
     setBase:b=>{

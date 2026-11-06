@@ -1,6 +1,6 @@
 (()=>{
   const api=acquireVsCodeApi();const root=document.getElementById('root');
-  let tokens=[],components=[],pending=new Map(),section='overview';
+  let tokens=[],components=[],pending=new Map(),section='overview',history={canUndo:false,label:''};
   const KINDS=['color','font','weight','size','space','other'];
   const LABEL={color:'색',font:'타이포',weight:'굵기',size:'크기',space:'간격',other:'기타'};
   const h=(tag,cls,...kids)=>{const n=document.createElement(tag);if(cls)n.className=cls;for(const k of kids.flat(Infinity)){if(k==null||k===false)continue;n.append(k instanceof Node?k:String(k));}return n;};
@@ -8,8 +8,10 @@
   function toHex(v){try{const c=h('span');c.style.color=v;root.append(c);const rgb=getComputedStyle(c).color;c.remove();const m=rgb.match(/(\d+),\s*(\d+),\s*(\d+)/);return m?'#'+[m[1],m[2],m[3]].map(x=>(+x).toString(16).padStart(2,'0')).join(''):'#888888';}catch{return '#888888';}}
   function setFoot(kind,msg){
     const n=document.getElementById('status'),b=document.getElementById('save');
-    if(n){n.className='status '+kind;n.textContent=msg||'';}
+    if(n&&kind!=null){n.className='status '+kind;n.textContent=msg||'';}
     if(b){b.disabled=!pending.size;b.textContent=pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장';}
+    const c=document.getElementById('cancel');if(c)c.disabled=!pending.size;
+    const u=document.getElementById('undo');if(u){u.disabled=!history.canUndo;u.title=history.canUndo?'마지막 저장 되돌리기 · '+history.label:'되돌릴 저장이 없습니다';}
   }
   // Typing must not rebuild the page (that would drop focus after every key and close the color picker mid-drag).
   function markDirty(){for(const el of root.querySelectorAll('[data-token]'))el.classList.toggle('dirty',pending.has(el.dataset.token));}
@@ -104,7 +106,7 @@
   function render(keepStatus=true){
     const prev=keepStatus?document.getElementById('status'):null;
     // A refresh from the page may arrive while someone is typing: put the caret back where it was.
-    const act=document.activeElement,key=act?.dataset?.key,sel=key&&act.type==='text'?[act.selectionStart,act.selectionEnd]:null,scroll=document.scrollingElement?.scrollTop||0;
+    const act=document.activeElement,key=act?.dataset?.key,sel=key&&act.type==='text'?[act.selectionStart,act.selectionEnd]:null,typed=key&&act.type==='text'?act.value:null,scroll=document.scrollingElement?.scrollTop||0;
     root.textContent='';
     root.append(h('header','hero',
       h('div',null,h('p','eyebrow','Point Code'),h('h1',null,'Design System')),
@@ -129,10 +131,19 @@
     const st=h('div','status');st.id='status';
     if(prev){st.className=prev.className;st.textContent=prev.textContent;}
     else st.textContent=tokens.length?'토큰 '+tokens.length+' · 컴포넌트 '+components.length+' · 변경 '+pending.size:'';
+    // ↺ on every token card/row; visible only while that token has an unsaved change.
+    for(const el of main.querySelectorAll('[data-token]')){
+      const r=btn('revert','↺',()=>api.postMessage({type:'discard',n:el.dataset.token}));r.title='이 토큰 되돌리기 (저장 전)';r.setAttribute('aria-label',el.dataset.token+' 되돌리기');
+      (el.querySelector('.row')||el).append(r);
+    }
     const save=btn('save',pending.size?'소스에 저장 ('+pending.size+')':'소스에 저장',()=>api.postMessage({type:'save'}));
     save.id='save';save.disabled=!pending.size;
-    root.append(h('div','foot',st,save));
-    if(key){const n=[...root.querySelectorAll('[data-key]')].find(x=>x.dataset.key===key);if(n){n.focus();if(sel)try{n.setSelectionRange(sel[0],sel[1]);}catch{}}}
+    const cancel=btn('ghost','취소',()=>api.postMessage({type:'discard'}));cancel.id='cancel';cancel.title='저장하지 않은 변경을 모두 버리고 화면을 원래대로';
+    const undo=btn('ghost','되돌리기',()=>api.postMessage({type:'undo'}));undo.id='undo';
+    root.append(h('div','foot',st,undo,cancel,save));
+    setFoot(null,null);
+    // The refresh may carry an older value than what was just typed: the focused field keeps the user's text.
+    if(key){const n=[...root.querySelectorAll('[data-key]')].find(x=>x.dataset.key===key);if(n){if(typed!=null&&n.value!==typed){n.value=typed;if(key.endsWith(':text')){pending.set(key.slice(0,-5),typed);markDirty();}}n.focus();if(sel)try{n.setSelectionRange(sel[0],sel[1]);}catch{}}}
     if(document.scrollingElement)document.scrollingElement.scrollTop=scroll;
   }
 
@@ -145,6 +156,7 @@
     }
     if(e.data?.type==='pending'){pending=new Map((e.data.pending||[]).map(p=>[p.n,p.v]));markDirty();setFoot('preview',document.getElementById('status')?.textContent||'');}
     if(e.data?.type==='status')setFoot(e.data.kind,e.data.message);
+    if(e.data?.type==='history'){history={canUndo:!!e.data.canUndo,label:e.data.label||''};setFoot(null,null);}
   });
   window.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();api.postMessage({type:'save'});}});
   render();api.postMessage({type:'ready'});

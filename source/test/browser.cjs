@@ -20,7 +20,8 @@ const until=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r
   commands:{registerCommand:(id,fn)=>{commands[id]=fn;return{dispose(){}};},executeCommand:async()=>{}},
   window:{registerWebviewViewProvider:(id,p)=>{providers[id]=p;return{dispose(){}};},showInputBox:async()=>url,showInformationMessage:async()=>{},showErrorMessage:s=>{throw Error(s);},setStatusBarMessage(){},showQuickPick:async()=>undefined,showTextDocument:async(doc,opts)=>{assert.equal(opts.viewColumn,2);opened=doc.uri?.fsPath||doc;return{set selection(s){selection=s;},revealRange(){}};},createWebviewPanel:()=>({webview:{onDidReceiveMessage(){},postMessage:async()=>{}},onDidDispose(){},dispose(){},reveal(){}})}};
  const load=Module._load;Module._load=function(id,...args){return id==='vscode'?mock:load.call(this,id,...args);};
- const ext=require('../extension');Module._load=load;ext.activate({extensionPath:root,extensionUri:{fsPath:root},subscriptions:[],workspaceState:{get:k=>store[k],update:async(k,v)=>{store[k]=v;}}});
+ const ext=require('../extension');Module._load=load;const storage=await fs.mkdtemp(path.join(require('os').tmpdir(),'pc-store-'));
+ ext.activate({extensionPath:root,extensionUri:{fsPath:root},storageUri:{fsPath:storage},subscriptions:[],workspaceState:{get:k=>store[k],update:async(k,v)=>{store[k]=v;}}});
  let fromView;const view={webview:{cspSource:'vscode-resource:',asWebviewUri:u=>u.fsPath,onDidReceiveMessage:fn=>{fromView=fn;},postMessage:async m=>{posted.push(m);}},show(){},onDidDispose(){}};
  providers['pointCode.inspector'].resolveWebviewView(view);assert.match(view.webview.html,/inspector-view\.js/);await fromView({type:'ready'});
  const lastData=()=>posted.filter(m=>m.type==='data'&&m.data).at(-1)?.data;
@@ -55,7 +56,7 @@ const until=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r
   if(process.env.HTTP_ONLY)return;
   opened=selection=undefined;
   browser=await chromium.launch({headless:true,args:['--no-sandbox']});const tab=await browser.newPage();await tab.goto(proxyUrl);
-  const ui=tab.locator('[data-point-code-ui]');await ui.locator('button').click();
+  const ui=tab.locator('[data-point-code-ui]');await ui.locator('button.pick').click();
   await tab.locator('#menu').dispatchEvent('pointerdown');assert.equal(await tab.evaluate(()=>window.pointerDowns),0,'pointerdown blocked while picking');
   await tab.locator('#target').hover();assert.equal(await ui.locator('.box').isVisible(),true);
   await tab.locator('#target').click();await tab.waitForFunction(()=>document.querySelector('[data-point-code-ui]').shadowRoot.querySelector('span').textContent==='선택 전달 완료');
@@ -88,12 +89,61 @@ const until=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r
   const css=fsSync.readFileSync(cssPath,'utf8');
   assert.match(css,/--brand: #0000ff/);assert.match(css,/button\{color:green;padding:9px\}/);
   assert.ok(fsSync.readFileSync(path.join(root,'demo.html'),'utf8').includes('Changed'));
+  // Undo that save: all three edits in both files go back, other content untouched.
+  await commands['pointCode.undoSave']();
+  await until(()=>fsSync.readFileSync(cssPath,'utf8').includes('--brand: #ff0000'));
+  assert.match(fsSync.readFileSync(cssPath,'utf8'),/button\{color:green;padding:4px\}/);
+  assert.ok(fsSync.readFileSync(path.join(root,'demo.html'),'utf8').includes('Choose me'),'text edit undone');
+  assert.ok(posted.some(m=>m.type==='undone'),'inspector told which save was undone');
+  assert.equal(posted.filter(m=>m.type==='history').at(-1).canUndo,false);
+  // Cancel: the webview sends the remaining edits (none); the page drops the overlay.
+  await fromView({type:'preview-all',selId:sel,items:[]});
+  await tab.waitForFunction(()=>getComputedStyle(document.querySelector('#target')).color!=='rgb(0, 255, 0)');
+  // Layout: the page reports box facts, the host turns "center both" into declarations, save writes them into the rule, undo restores.
+  assert.ok(d.doc,'pick carries its page id');assert.equal(d.layout.parent.tag,'body');assert.ok(d.layout.self.display);
+  await fromView({type:'layout-intent',selId:sel,intent:{type:'align',x:'center',y:'center'},ctx:d.layout,ui:{align:{x:'center',y:'center'}}});
+  const ld=posted.filter(m=>m.type==='layout-decls').at(-1);
+  assert.deepEqual(ld.decls,[['display','inline-flex'],['justify-content','center'],['align-items','center']],'an inline-block button becomes inline-flex');assert.equal(ld.made,true);
+  await fromView({type:'layout-intent',selId:sel,intent:{type:'self',axis:'y',value:'center'},ctx:d.layout});
+  assert.equal(posted.filter(m=>m.type==='layout-decls').at(-1).error,'block-y','no vertical placement in a block parent');
+  const b2=posted.length;
+  await fromView({type:'save',items:[{key:'layout',selId:sel,mode:'layout',id:targetRule.loc.id,target:'css',decls:ld.decls}]});
+  await until(()=>posted.some((m,i)=>i>=b2&&m.type==='save-result'));
+  assert.equal(posted.filter(m=>m.type==='save-result').at(-1).results[0].ok,true,JSON.stringify(posted.filter(m=>m.type==='save-result').at(-1)));
+  assert.match(fsSync.readFileSync(cssPath,'utf8'),/#target\{color:var\(--brand\);\s*display:\s*inline-flex;\s*justify-content:\s*center;\s*align-items:\s*center;?\s*\}/);
+  await commands['pointCode.undoSave']();
+  await until(()=>fsSync.readFileSync(cssPath,'utf8').includes('#target{color:var(--brand)}'));
+  // 수정 지도: look-alike facts come with the pick; "show on page" flashes elements; the same hard-coded color
+  // in two files becomes one new token in one save, and one undo restores both files.
+  assert.ok(d.alike&&Array.isArray(d.alike.groups),'look-alike facts collected');
+  await fromView({type:'flash',selector:'#target'});
+  await tab.waitForFunction(()=>document.querySelector('#target').hasAttribute('data-point-affected'));
+  const extra=path.join(root,'demo-extra.css');await fs.writeFile(extra,'.x{color:#123456}\n.y{border:1px solid #123456}\n');
+  const ff=mock.workspace.findFiles;mock.workspace.findFiles=async g=>/css/.test(g)?[{fsPath:cssPath},{fsPath:extra}]:[];
+  try{
+    await fromView({type:'scan-literal',value:'#123456'});
+    const sc=posted.filter(m=>m.type==='literal-scan').at(-1);assert.equal(sc.count,2);assert.equal(sc.files,1);
+    const b3=posted.length;
+    await fromView({type:'tokenize',value:'#123456',name:'--ink',create:true,file:cssPath});
+    await until(()=>posted.some((m,i)=>i>=b3&&m.type==='tokenize-result'));
+    assert.equal(posted.filter(m=>m.type==='tokenize-result').at(-1).count,2);
+    assert.match(fsSync.readFileSync(cssPath,'utf8'),/:root\{--brand: #ff0000;\s*--ink: #123456;?\s*\}/,'new token defined in :root');
+    assert.equal(fsSync.readFileSync(extra,'utf8'),'.x{color:var(--ink)}\n.y{border:1px solid var(--ink)}\n');
+    await commands['pointCode.undoSave']();
+    await until(()=>fsSync.readFileSync(extra,'utf8').includes('#123456'));
+    assert.doesNotMatch(fsSync.readFileSync(cssPath,'utf8'),/--ink/,'one undo restores both files');
+  }finally{mock.workspace.findFiles=ff;await fs.unlink(extra).catch(()=>{});}
   const bodyRule=d.inherited.find(r=>r.from==='body');
   await fromView({type:'preview',selId:sel,mode:'css',id:bodyRule.loc.id,prop:'font-family',value:'monospace',css:[{selector:'body',prop:'font-family',value:'monospace',scope:'rule'}],highlight:{selector:'body',from:'body',broad:false}});
   await tab.waitForFunction(()=>document.body.getAttribute('data-point-from')==='');
+  // Select the parent from the inspector: the page that made the pick re-picks its parent.
+  await fromView({type:'select-relative',dir:'parent'});
+  await until(()=>lastData()?.el.tag==='body');
+  await fromView({type:'select-relative',dir:'child'});
+  await until(()=>lastData()?.el.tag==='button');
   await tab.locator('#target').click();assert.equal(await tab.evaluate(()=>window.normalClicks),1);
   await tab.locator('#menu').click();assert.equal(await tab.evaluate(()=>window.pointerDowns),1,'pointerdown passes when not picking');
-  await tab.keyboard.press('Alt+Shift+P');await tab.keyboard.press('Escape');assert.equal(await ui.locator('button').textContent(),'요소 선택');
+  await tab.keyboard.press('Alt+Shift+P');await tab.keyboard.press('Escape');assert.equal(await ui.locator('button.pick').textContent(),'요소 선택');
   await tab.addScriptTag({url:script});assert.equal(await tab.locator('[data-point-code-ui]').count(),1);
   // Board frames: no picker UI and no SSE connection of their own; previews arrive from the parent by postMessage.
   const board=await browser.newPage();let sse=0;board.on('request',r=>{if(r.url().includes('/__point_code__/live'))sse++;});
@@ -106,6 +156,27 @@ const until=async fn=>{for(let i=0;i<100;i++){if(fn())return;await new Promise(r
   await new Promise(r=>setTimeout(r,200));
   assert.equal(await frame.evaluate(()=>document.documentElement.style.getPropertyValue('--brand')),'#123456','inspector reset keeps Design System previews');
   assert.equal(sse,0,'board frames open no SSE connection');
+  // Vanilla / single-page apps: links on the page become screens, and "화면 담기" pins the current state.
+  await tab.evaluate(()=>document.body.insertAdjacentHTML('beforeend','<a href="/#/settings">Settings</a><a href="/about.html">About</a><input id="q"><dialog open id="m"><h2>Hello modal</h2></dialog>'));
+  await tab.fill('#q','hello');
+  await until(()=>(store['pointCode.links']?.['']||[]).some(l=>l.route==='/#/settings'));
+  assert.ok(store['pointCode.links'][''].some(l=>l.route==='/about.html'&&l.label==='About'));
+  await ui.locator('button.snap').click();
+  await tab.waitForFunction(()=>document.querySelector('[data-point-code-ui]').shadowRoot.querySelector('span').textContent==='화면 그리드에 담았습니다');
+  const snapItem=store['pointCode.snapshots'][0];assert.match(snapItem.label,/Hello modal/);
+  const token=new URL(script).searchParams.get('token');
+  const snapUrl=proxyOrigin+'/__point_code__/snap/'+snapItem.id+'.html?token='+token;
+  assert.equal((await request(snapUrl.replace(token,'wrong'))).status,403);
+  const snapPage=await request(snapUrl);assert.equal(snapPage.status,200);
+  assert.doesNotMatch(snapPage.body,/normalClicks/,'app scripts removed');
+  assert.match(snapPage.body,/<base href="http:\/\/127\.0\.0\.1/);assert.match(snapPage.body,/value="hello"/);assert.match(snapPage.body,/<dialog open/);
+  assert.match(snapPage.body,/__point_code__\/picker\.js\?token=/,'picker attached for live previews');
+  const snapFrame=await browser.newPage();
+  await snapFrame.setContent('<iframe name="point-code-board" src="'+snapUrl+'" style="width:800px;height:600px"></iframe>');
+  const sf=await (await snapFrame.waitForSelector('iframe')).contentFrame();await sf.waitForFunction(()=>!!window.__pointCodeCleanup);
+  assert.equal(await sf.evaluate(()=>document.querySelector('dialog')?.open),true,'captured modal stays open');
+  await snapFrame.evaluate(()=>document.querySelector('iframe').contentWindow.postMessage({__pointCode:'live',payload:{channel:'palette',tokens:[{n:'--brand',v:'#654321'}]}},'*'));
+  await sf.waitForFunction(()=>document.documentElement.style.getPropertyValue('--brand')==='#654321');
   console.log('PASS Chromium via proxy: auto injection, highlight, pointerdown blocking, pick without opening editor, inspector rules/overrides/states/inheritance, live CSS/token/text preview, persist, normal browsing, Escape, reinjection');
  }finally{if(browser)await browser.close();await ext.deactivate();pageServer.close();await fs.unlink(path.join(root,'demo.html')).catch(()=>{});await fs.unlink(cssPath).catch(()=>{});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

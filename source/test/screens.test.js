@@ -75,3 +75,13 @@ test('device presets are CSS viewports',()=>{
   assert.ok(DEVICES.some(d=>d.id==='fold-cover'));
   assert.equal(new Set(DEVICES.map(d=>d.id)).size,DEVICES.length);
 });
+
+const {cleanLinks,mergeLinks}=require('../screen-routes');
+test('links from the page become screens (vanilla / hash-routed SPA)',()=>{
+  const r=cleanLinks([{route:'/about.html',label:' About  us '},{route:'/#/settings',label:'Settings'},{route:'/#section-2'},{route:'/logo.png'},
+    {route:'//evil.test/x'},{route:'/__point_code__/snap/abc.html'},{route:'/about.html'},{route:'/?tab=billing',label:''},{route:'javascript:alert(1)'}]);
+  assert.deepEqual(r,[{route:'/about.html',label:'About us'},{route:'/#/settings',label:'Settings'},{route:'/',label:'/'},{route:'/?tab=billing',label:'/?tab=billing'}]);
+  const known=[{route:'/a',label:'A'}];
+  assert.equal(mergeLinks(known,[{route:'/a',label:'A'}]),null,'nothing new');
+  assert.deepEqual(mergeLinks(known,[{route:'/b',label:'B'}]).map(l=>l.route),['/a','/b']);
+});

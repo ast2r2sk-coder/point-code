@@ -212,6 +212,25 @@ function diffRange(a, b) {
   let e = 0; while (e < max-s && a[a.length-1-e] === b[b.length-1-e]) e++;
   return {start:s, end:a.length-e, text:b.slice(s, b.length-e)};
 }
+// Undo one saved change (`before` -> `after`) in `current`. Works even if the file was edited elsewhere since:
+// the changed span with as much surrounding context as still matches must occur exactly once (longest context tried first,
+// so nearby edits only shorten the context). Null when the span itself changed or its position is ambiguous.
+function revertEdit(current, before, after) {
+  if (current === after) return before;
+  if (before === after) return current;
+  const d = diffRange(before, after), afterEnd = after.length-(before.length-d.end), span = after.slice(d.start, afterEnd);
+  for (const [a, b] of [[40,40],[40,0],[0,40],[16,16],[16,0],[0,16],[4,4]]) {
+    const pre = after.slice(Math.max(0, d.start-a), d.start), post = after.slice(afterEnd, afterEnd+b);
+    const needle = pre+span+post;
+    if (!needle) continue;
+    const i = current.indexOf(needle);
+    if (i < 0) continue;
+    if (current.indexOf(needle, i+1) >= 0) return null;
+    const s = i+pre.length;
+    return current.slice(0, s)+before.slice(d.start, d.end)+current.slice(s+span.length);
+  }
+  return null;
+}
 // Runs async jobs one after another (saves that touch the same file must not read the same original text).
 function serial() {
   let tail = Promise.resolve();
@@ -300,5 +319,211 @@ function setInlineStyle(text, line, prop, value, file = '') {
   });
   return bad ? null : {text:lines.join('\n'), line:hit.line};
 }
+// ---- Layout: plain intents ("center this", "stack vertically") → CSS declarations, from the computed layout of the element and its parent.
+// ctx.self / ctx.parent: {display, dir} computed values; ctx.self.fullWidth: the element spans its parent's content box.
+const isFlex = d => /flex/.test(d || ''), isGrid = d => /grid/.test(d || '');
+const FLEX_POS = {start:'flex-start', center:'center', end:'flex-end', stretch:'stretch'};
+const GRID_POS = {start:'start', center:'center', end:'end', stretch:'stretch'};
+function layoutDecls(intent, ctx = {}) {
+  const self = ctx.self || {}, parent = ctx.parent || {}, out = [], add = (p, v) => out.push([p, v]);
+  const grid = isGrid(self.display);
+  // Content alignment needs a flex box; a plain block becomes one (inline stays inline).
+  const box = () => { if (isFlex(self.display) || grid) return false; add('display', /^inline/.test(self.display || '') ? 'inline-flex' : 'flex'); return true; };
+  const v = intent.value;
+  switch (intent.type) {
+    case 'flow': {
+      if (grid) return {decls:[], error:'grid-flow'};
+      const made = box(); add('flex-direction', v === 'column' ? 'column' : 'row');
+      return {decls:out, made};
+    }
+    case 'align': {
+      if (!GRID_POS[intent.x] || !GRID_POS[intent.y]) return {decls:[], error:'value'};
+      if (grid) { add('justify-items', GRID_POS[intent.x]); add('align-items', GRID_POS[intent.y]); return {decls:out}; }
+      const made = box(), column = !made && /column/.test(self.dir || '');
+      add('justify-content', FLEX_POS[column ? intent.y : intent.x]);
+      add('align-items', FLEX_POS[column ? intent.x : intent.y]);
+      return {decls:out, made};
+    }
+    case 'distribute': {
+      const map = grid ? {pack:'start', between:'space-between', evenly:'space-evenly'} : {pack:'flex-start', between:'space-between', evenly:'space-evenly'};
+      if (!map[v]) return {decls:[], error:'value'};
+      const made = box(); add('justify-content', map[v]);
+      return {decls:out, made};
+    }
+    case 'gap': {
+      const made = box(); add('gap', String(v));
+      return {decls:out, made};
+    }
+    case 'self': {
+      if (!GRID_POS[v]) return {decls:[], error:'value'};
+      const x = intent.axis !== 'y', pf = isFlex(parent.display), pg = isGrid(parent.display);
+      if (pg) { add(x ? 'justify-self' : 'align-self', GRID_POS[v]); return {decls:out}; }
+      if (pf) {
+        const main = x !== /column/.test(parent.dir || '');
+        if (!main) { add('align-self', FLEX_POS[v]); return {decls:out}; }
+        // Main axis of a flex row/column: auto margins push the item; stretch = take the free space.
+        if (v === 'stretch') { add('flex-grow', '1'); return {decls:out}; }
+        const [a, b] = x ? ['margin-left', 'margin-right'] : ['margin-top', 'margin-bottom'];
+        add(a, v === 'start' ? '0' : 'auto'); add(b, v === 'end' ? '0' : 'auto');
+        return {decls:out};
+      }
+      // Normal flow: only horizontal placement exists, and only for block boxes.
+      if (!x) return {decls:[], error:'block-y'};
+      if (/^inline/.test(self.display || '')) return {decls:[], error:'inline'};
+      if (v === 'stretch') { add('width', 'auto'); add('margin-left', '0'); add('margin-right', '0'); return {decls:out}; }
+      if (self.fullWidth) add('width', 'fit-content');
+      add('margin-left', v === 'start' ? '0' : 'auto'); add('margin-right', v === 'end' ? '0' : 'auto');
+      return {decls:out};
+    }
+    case 'text': {
+      if (!/^(left|center|right|justify)$/.test(v)) return {decls:[], error:'value'};
+      add('text-align', v); return {decls:out};
+    }
+  }
+  return {decls:[], error:'intent'};
+}
+
+// The same declarations as Tailwind utilities: which classes to add, and which existing ones they replace.
+// Only base utilities (no `md:` / `hover:` variant) are replaced; variants are the author's responsive intent.
+const TW_GROUP = {
+  'display':/^(flex|inline-flex|grid|inline-grid|block|inline-block|inline|hidden|contents|table)$/,
+  'flex-direction':/^flex-(row|col)(-reverse)?$/,
+  'justify-content':/^justify-(start|center|end|between|around|evenly|stretch|normal)$/,
+  'align-items':/^items-/,
+  'justify-items':/^justify-items-/,
+  'align-self':/^self-/,
+  'justify-self':/^justify-self-/,
+  'text-align':/^text-(left|center|right|justify|start|end)$/,
+  'gap':/^gap-(?![xy]-)/,
+  'flex-grow':/^(flex-)?grow(-0)?$/,
+  'margin-x':/^(mx|ml|mr)-(auto|0)$/,
+  'margin-y':/^(my|mt|mb)-(auto|0)$/,
+  'width':/^w-(fit|auto)$/
+};
+const TW_VALUE = {
+  'display':{flex:'flex','inline-flex':'inline-flex',grid:'grid'},
+  'flex-direction':{row:'flex-row',column:'flex-col'},
+  'justify-content':{'flex-start':'justify-start',start:'justify-start',center:'justify-center','flex-end':'justify-end',end:'justify-end','space-between':'justify-between','space-evenly':'justify-evenly'},
+  'align-items':{'flex-start':'items-start',start:'items-start',center:'items-center','flex-end':'items-end',end:'items-end',stretch:'items-stretch'},
+  'justify-items':{start:'justify-items-start',center:'justify-items-center',end:'justify-items-end',stretch:'justify-items-stretch'},
+  'align-self':{'flex-start':'self-start',start:'self-start',center:'self-center','flex-end':'self-end',end:'self-end',stretch:'self-stretch'},
+  'justify-self':{start:'justify-self-start',center:'justify-self-center',end:'justify-self-end',stretch:'justify-self-stretch'},
+  'text-align':{left:'text-left',center:'text-center',right:'text-right',justify:'text-justify'},
+  'flex-grow':{'1':'grow'},
+  'width':{'fit-content':'w-fit',auto:'w-auto'}
+};
+function gapUtil(v) {
+  const s = String(v).trim(), px = s.match(/^(\d+(?:\.\d+)?)px$/), tok = s.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+  if (s === '0' || s === '0px') return 'gap-0';
+  if (px && (+px[1]) % 2 === 0) return 'gap-'+(+px[1]/4);
+  if (tok) return 'gap-[var('+tok[1]+')]';
+  return /^[\w.%()-]+$/.test(s) ? 'gap-['+s+']' : null;
+}
+// decls [[prop, value]] → {add, groups} or null when a declaration has no utility equivalent.
+function layoutUtilities(decls) {
+  const map = new Map(decls), add = [], groups = new Set();
+  for (const axis of [['margin-left', 'margin-right', 'margin-x', 'mx', 'ml', 'mr'], ['margin-top', 'margin-bottom', 'margin-y', 'my', 'mt', 'mb']]) {
+    const [a, b, group, both, first, second] = axis;
+    if (!map.has(a) && !map.has(b)) continue;
+    const va = map.get(a), vb = map.get(b); map.delete(a); map.delete(b); groups.add(group);
+    if (va === 'auto' && vb === 'auto') add.push(both+'-auto');
+    else if (va === 'auto' && vb === '0') add.push(first+'-auto');
+    else if (va === '0' && vb === 'auto') add.push(second+'-auto');
+    else if (va === '0' && vb === '0') add.push(both+'-0');
+    else return null;
+  }
+  for (const [p, v] of map) {
+    const cls = p === 'gap' ? gapUtil(v) : TW_VALUE[p]?.[v];
+    if (!cls || !TW_GROUP[p]) return null;
+    add.push(cls); groups.add(p);
+  }
+  return {add, groups:[...groups]};
+}
+// Apply {add, groups} to a class list string: drop base utilities of those groups, append the new ones.
+function setUtilityGroup(classes, change) {
+  const toks = String(classes).split(/\s+/).filter(Boolean);
+  const kept = toks.filter(t => t.includes(':') || !change.groups.some(g => TW_GROUP[g]?.test(t)));
+  for (const c of change.add) if (!kept.includes(c)) kept.push(c);
+  return kept.join(' ');
+}
+// Rewrite the string literal (class="…", className="…", cn('…'), template text) that holds `anchor`, nearest to `line`.
+function rewriteClassLiteral(text, line, anchor, fn) {
+  const lines = text.split('\n'), hits = [];
+  const re = /(["'`])((?:(?!\1)[^\\\n]|\\.)*)\1/g;
+  for (let i = Math.max(0, (line || 1)-16); i < Math.min(lines.length, (line || 1)+15); i++) {
+    for (const m of lines[i].matchAll(re)) {
+      if (m[1] === '`' && m[2].includes('${')) continue;
+      if (m[2].split(/\s+/).includes(anchor)) hits.push({line:i+1, start:m.index+1, value:m[2]});
+    }
+  }
+  const hit = nearest(hits, line || 0); if (!hit) return null;
+  const next = fn(hit.value); if (next == null || next === hit.value) return next === hit.value ? {text, line:hit.line, before:hit.value, after:next} : null;
+  const l = lines[hit.line-1];
+  lines[hit.line-1] = l.slice(0, hit.start)+next+l.slice(hit.start+hit.value.length);
+  return {text:lines.join('\n'), line:hit.line, before:hit.value, after:next};
+}
+
+// ---- Hard-coded values: find the same literal (a color or a length) wherever it is written directly, to turn it into a token.
+// Colors match across spellings (#abc, #aabbcc, rgb(170 187 204)); lengths match exactly and only in the same family of
+// properties (an 8px padding is not the same decision as an 8px font size). Custom property definitions are skipped:
+// `--brand: #0a84ff` is where the token lives, not a hard-coded use.
+const HEX = h => h.length <= 5 ? '#'+[...h.slice(1)].map(c => c+c).join('') : h;
+function literalKey(v) {
+  const s = String(v).trim().toLowerCase();
+  if (/^#[0-9a-f]{3,8}$/.test(s)) { const x = HEX(s); return x.length === 9 && x.endsWith('ff') ? x.slice(0, 7) : x; }
+  const m = s.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/);
+  if (m) {
+    const a = m[4] == null ? 1 : m[4].endsWith('%') ? parseFloat(m[4])/100 : +m[4];
+    const hex = '#'+[m[1], m[2], m[3]].map(n => Math.min(255, +n).toString(16).padStart(2, '0')).join('');
+    return a >= 1 ? hex : hex+Math.round(a*255).toString(16).padStart(2, '0');
+  }
+  return s.replace(/\s+/g, ' ');
+}
+const isColorLiteral = v => /^(#[0-9a-f]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))$/i.test(String(v).trim());
+const FAMILY = [/^(margin|padding|gap|row-gap|column-gap|inset|top|right|bottom|left)(-|$)/, /radius/, /^(width|height|min-width|max-width|min-height|max-height|flex-basis)$/, /^font-size$/, /^(letter-spacing|line-height)$/, /^(border|outline)(-\w+)*-width$|^(border|outline)$/];
+const familyOf = prop => FAMILY.find(re => re.test(prop)) || null;
+// Every place `value` is written as a literal inside a declaration: [{start, end, line, prop}].
+function findLiterals(text, value, {prop} = {}) {
+  const key = literalKey(value), color = isColorLiteral(value), fam = !color && prop ? familyOf(prop) : null;
+  if (!color && !/^-?\d*\.?\d+(px|rem|em)$/.test(String(value).trim())) return [];
+  const m = mask(text), out = [];
+  const decl = /(^|[{;])(\s*)(-{0,2}[A-Za-z][\w-]*)\s*:([^;{}]*)/g;
+  const tok = color ? /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g : /(?<![\w.#-])-?\d*\.?\d+(?:px|rem|em)\b/g;
+  for (const d of m.matchAll(decl)) {
+    const p = d[3].toLowerCase();
+    if (p.startsWith('--')) continue;
+    if (fam && !fam.test(p)) continue;
+    if (!color && !fam && prop && p !== prop) continue;
+    const vStart = d.index+d[0].length-d[4].length;
+    for (const t of d[4].matchAll(tok)) {
+      if (literalKey(t[0]) !== key) continue;
+      const start = vStart+t.index;
+      out.push({start, end:start+t[0].length, line:lineAt(text, start), prop:p, text:text.slice(start, start+t[0].length)});
+    }
+  }
+  return out;
+}
+function replaceLiterals(text, value, replacement, opts = {}) {
+  const hits = findLiterals(text, value, opts);
+  let out = text;
+  for (const h of [...hits].reverse()) out = out.slice(0, h.start)+replacement+out.slice(h.end);
+  return {text:out, count:hits.length, lines:[...new Set(hits.map(h => h.line))]};
+}
+// Define a new custom property: in :root (or @theme / html) when the file has one, else in a new :root block at the top.
+function addVariable(text, name, value) {
+  const m = mask(text);
+  if (new RegExp('(^|[{;\\s])'+escapeRe(name)+'\\s*:').test(m)) return {error:'exists'};
+  const lines = text.split(/\r?\n/);
+  for (const sel of [':root', '@theme', 'html']) {
+    const n = locateSelector(lines, sel);
+    const next = n && setDeclaration(text, n, name, value);
+    if (next) return {text:next, line:n, selector:sel};
+  }
+  const nl = text.includes('\r\n') ? '\r\n' : '\n';
+  return {text:':root {'+nl+'  '+name+': '+value+';'+nl+'}'+nl+nl+text, line:1, selector:':root', created:true};
+}
+
 module.exports = {SOURCE_EXT,EXCLUDE,localUrl,originAliases,sourcePath,safeSource,hasToken,scoreLine,rank,selectorClasses,unhash,locateSelector,nearUsage,
-  authoredSelector,setDeclaration,setVariable,setVariableIn,diffRange,serial,swapUtility,replaceClass,replaceText,setInlineStyle,weightUtil,WEIGHT_NAME};
+  authoredSelector,setDeclaration,setVariable,setVariableIn,diffRange,revertEdit,serial,swapUtility,replaceClass,replaceText,setInlineStyle,weightUtil,WEIGHT_NAME,
+  layoutDecls,layoutUtilities,setUtilityGroup,rewriteClassLiteral,
+  literalKey,isColorLiteral,findLiterals,replaceLiterals,addVariable};

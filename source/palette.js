@@ -2,7 +2,8 @@
 const vscode = require('vscode');
 const crypto = require('crypto');
 const {EXCLUDE,safeSource} = require('./core');
-const {persistToken,CSS_GLOB} = require('./workspace-io');
+const io = require('./workspace-io');
+const {persistToken,CSS_GLOB} = io;
 const decoder = new TextDecoder();
 const str = (v,n=400) => typeof v==='string' ? v.slice(0,n) : '';
 const okVal = v => typeof v==='string' && v.trim() && v.length<=300 && !/[{}]|<\/|javascript:/i.test(v) ? v.trim() : null;
@@ -47,6 +48,8 @@ function createPalette(context, deps) {
   const status = (kind, message) => {
     for(const t of targets()) t.webview.postMessage({type:'status',kind,message});
   };
+  const history = h => {for(const t of targets()) t.webview.postMessage({type:'history',...h});};
+  io.onHistory(history);
 
   const resolveFile = async file => {
     const roots = (vscode.workspace.workspaceFolders||[]).map(f=>f.uri.fsPath);
@@ -114,21 +117,36 @@ function createPalette(context, deps) {
 
   const sendLive = () => deps.live?.({channel:'palette',tokens:[...pending.entries()].map(([n,v])=>({n,v}))});
   const resolveAny = async file => (await resolveFile(file));
+  // Cancel: drop unsaved edits (one token, or all) and take them off every preview.
+  function discard(name) {
+    const n = name ? (pending.delete(name) ? 1 : 0) : pending.size;
+    if(!name) pending.clear();
+    sendLive();
+    post();
+    status('', n ? (name ? name+' 되돌림 (저장 전)' : '저장하지 않은 변경 '+n+'개를 취소했습니다') : '취소할 변경이 없습니다');
+  }
   async function saveAll() {
     if(!pending.size) return status('warn','저장할 변경이 없습니다');
     const items = [...pending.entries()];
     const ok = [], fail = [];
-    for(const [n,v] of items) {
-      const tok = tokens.find(t=>t.n===n);
-      let written = null;
-      try {written = await persistToken(n, v, {hintFile:tok?.file||null, selector:tok?.sel||null, resolveFile:resolveAny});} catch {}
-      if(written) {
-        ok.push(written);
-        pending.delete(n);
-        const i = tokens.findIndex(t=>t.n===n);
-        if(i>=0) tokens[i] = {...tokens[i],v,c:v};
-      } else fail.push(n);
-    }
+    io.beginBatch('palette');
+    try {
+      for(const [n,v] of items) {
+        const tok = tokens.find(t=>t.n===n);
+        let written = null;
+        try {written = await persistToken(n, v, {hintFile:tok?.file||null, selector:tok?.sel||null, resolveFile:resolveAny});} catch {}
+        if(written) {
+          ok.push(written);
+          pending.delete(n);
+          const i = tokens.findIndex(t=>t.n===n);
+          if(i>=0) {
+            const prev = tokens[i];
+            io.onUndo(()=>{const j = tokens.findIndex(t=>t.n===n); if(j>=0) tokens[j] = {...tokens[j],v:prev.v,c:prev.c};});
+            tokens[i] = {...tokens[i],v,c:v};
+          }
+        } else fail.push(n);
+      }
+    } finally {io.endBatch();}
     sendLive();
     post();
     const why = '정의가 여러 곳에 있거나 없어 위치를 정하지 못함';
@@ -139,11 +157,13 @@ function createPalette(context, deps) {
 
   async function onMessage(m) {
     try {
-      if(m?.type==='ready') return post();
+      if(m?.type==='ready') {post();history(io.historyState());return;}
+      if(m?.type==='discard') return discard(typeof m.n==='string' ? m.n : null);
+      if(m?.type==='undo') return deps.undo?.();
       if(m?.type==='refresh') return refresh(null, true);
       if(m?.type==='open-screens') return vscode.commands.executeCommand('pointCode.openScreens');
       if(m?.type==='preview' && m.n && m.v!=null) return preview(m.n, String(m.v));
-      if(m?.type==='save') return saveAll();
+      if(m?.type==='save') return io.exclusive(saveAll);
       if(m?.type==='open' && m.file) {
         const f = await resolveFile(m.file);
         if(f) await deps.openSource({file:f.file,line:1,column:1});
@@ -155,7 +175,7 @@ function createPalette(context, deps) {
     const media = vscode.Uri.joinPath(context.extensionUri,'media');
     const nonce = crypto.randomBytes(16).toString('hex');
     const uri = name => webview.asWebviewUri(vscode.Uri.joinPath(media,name));
-    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${uri('palette-view.css')}"></head><body class="board"><div id="root"></div><script nonce="${nonce}" src="${uri('palette-view.js')}"></script></body></html>`;
+    return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${uri('tokens.css')}"><link rel="stylesheet" href="${uri('palette-view.css')}"></head><body class="board"><div id="root"></div><script nonce="${nonce}" src="${uri('palette-view.js')}"></script></body></html>`;
   }
 
   function reveal() {
@@ -190,6 +210,8 @@ function createPalette(context, deps) {
   return {
     provider,
     update(pageTokens) {void refresh(pageTokens);},
+    // A save was undone: token values were restored by the batch's undo hooks.
+    undone(r) {post(); status(r.kind||'error', r.error||r.message);},
     refresh:()=>refresh(null, true),
     reveal,
     KIND_LABEL

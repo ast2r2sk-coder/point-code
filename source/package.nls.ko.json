@@ -13,5 +13,6 @@
   "cmd.stop": "중지",
   "view.inspector": "요소 인스펙터",
   "view.palette": "디자인 시스템",
-  "view.screens": "화면 그리드"
+  "view.screens": "화면 그리드",
+  "cmd.undoSave": "마지막 저장 되돌리기"
 }

@@ -10,7 +10,7 @@ Point Code is a [VS Code](https://code.visualstudio.com/) / [Cursor](https://cur
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.85-blue?logo=visualstudiocode)](https://code.visualstudio.com/)
-[![Version](https://img.shields.io/badge/version-0.6.0-informational)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.0-informational)](./CHANGELOG.md)
 [![GitHub](https://img.shields.io/badge/github-ast2r2sk--coder%2Fpoint--code-181717?logo=github)](https://github.com/ast2r2sk-coder/point-code)
 
 > **Keywords:** VS Code extension, Cursor extension, element inspector, click to source, design tokens, design system, screen board, Tailwind, React Vue Svelte Next.js, live CSS preview
@@ -42,8 +42,11 @@ No cloud AI. No telemetry. Traffic stays on `127.0.0.1`.
 - **Element Inspector** (activity bar) — components & props, cascade, `:hover`, inheritance, CSS variables
 - **Design System** — full editor panel: Colors / Typography / Spacing / Components; edit tokens once → every connected preview updates; save to source
 - **Screens board** — Figma-like canvas of routes (vanilla `*.html`, Next app/pages, SvelteKit, file-based `src/pages`; per app in monorepos; dynamic routes ask for a sample value) + captured modals/toasts/drawers; zoom; Desktop · Laptop · iPad · iPhone · Android · Flip · Fold (CSS viewports); select screens to preview Design System edits on just those
+- **Single-page / vanilla JS apps** — links you visit in the preview (`/about.html`, `#/settings`) are added to the Screens board automatically; **화면 담기** (Capture screen) pins the current state (open modal, active tab, filled form) as a board frame that still shows live style edits
 - **Preview toolbar** — **디자인 시스템** / **화면 그리드** buttons, viewport chips, plain-language help
-- **Live preview** (SSE) · **Save to source** (Ctrl/Cmd+S); bundled CSS still tries a unique workspace match on save
+- **Live preview** (SSE) · **Save to source** (Ctrl/Cmd+S) · **Cancel** / per-field **↺** before saving · **Undo** the last save (keeps edits you made elsewhere in the file); bundled CSS still tries a unique workspace match on save
+- **Edit map** (수정 지도) — before you change anything: which rule this is and how many elements share it, where the component is used in the project, elements that look the same but are styled elsewhere (show them on the page), and hard-coded colors / sizes with one-click **replace with token** or **create a token and replace every copy** (one save, one undo)
+- **Layout** (배치) — direction, a 3×3 alignment pad, distribute, gap, placement in the parent (left / center / right / fill, top / bottom when the parent allows it) and text alignment, without CSS property names; writes the element's rule or its Tailwind classes; **↑ parent / ↓ child** selection
 - **Tailwind-aware** — utilities update `className` (`font-bold` → `font-medium`)
 - **Framework-aware** — React 18/19 + RSC, Vue, Svelte, optional Babel `data-point-source`
 
@@ -118,6 +121,7 @@ Copy `source/integration/babel.cjs` into your app and wire it via `@vitejs/plugi
 | `Point Code: Change Dev Server URL` | `개발 서버 주소 바꾸기` | Reconnect to another dev server URL |
 | `Point Code: Open Design System` | `디자인 시스템 열기` | Design System board (editor panel) |
 | `Point Code: Open Screens Board` | `화면 그리드 열기` | Screens board (editor panel) |
+| `Point Code: Undo Last Save to Source` | `마지막 저장 되돌리기` | Revert the last **Save to source** (all files it touched) |
 | `Point Code: Copy Proxy URL` | `프록시 주소 복사` | Copy proxy origin |
 | `Point Code: Copy Connection Script` | `연결 스크립트 복사` | Copy `<script>` tag |
 | `Point Code: Find Styles for Selected Element` | `선택한 요소의 스타일 찾기` | Workspace CSS QuickPick |
@@ -224,6 +228,8 @@ Point Code는 [VS Code](https://code.visualstudio.com/) / [Cursor](https://curso
 | 디자인만 살짝 | 문구·색·굵기·폰트·간격 **실시간 미리보기** |
 | 여러 화면 한눈에 | **화면 그리드** 보드 (데탑·태블릿·모바일·플립·폴드) |
 | 토큰·컴포넌트 모아보기 | **디자인 시스템** 보드 (Colors / Typography / Spacing / Components) |
+| 같은 디자인이 여기저기 복사됨 | **수정 지도** — 함께 바뀌는 곳, 따로 만든 닮은 요소, 하드코딩 값을 토큰으로 한 번에 |
+| 가운데 정렬 어떻게 하지? | **배치** — 방향·9칸 정렬 패드·부모 안 위치를 버튼으로 |
 
 클라우드·텔레메트리 없음. 트래픽은 `127.0.0.1`만.
 
@@ -239,10 +245,13 @@ Point Code는 [VS Code](https://code.visualstudio.com/) / [Cursor](https://curso
 2. 미리보기 창이 열림 — 위 안내는 “이 창은 미리보기이며, 실제 앱을 연결해 보여 준다”는 뜻입니다
 3. 페이지 하단 **요소 선택** (또는 Alt+Shift+P)
 4. 왼쪽 **요소 인스펙터**에서 수정 → **소스에 저장**
-5. 미리보기 상단 **디자인 시스템** / **화면 그리드** 버튼으로 큰 보드 패널 열기  
+5. 미리보기 상단 **디자인 시스템** / **화면 그리드** 버튼으로 큰 보드 패널 열기
+   - 바닐라 JS·한 페이지 앱: 미리보기에서 메뉴를 따라가면 화면이 보드에 추가되고, 모달·탭처럼 버튼으로만 바뀌는 화면은 **화면 담기**로 고정합니다  
    (명령 팔레트: `Point Code: 디자인 시스템 열기` / `화면 그리드 열기`)
 
-### 저장
+### 저장 · 취소 · 되돌리기
+
+- **취소**는 저장하지 않은 변경을 버립니다(항목별 ↺ 또는 전체). **되돌리기**는 마지막 ‘소스에 저장’을 파일에서 되돌립니다. 그 사이 같은 파일의 다른 곳을 고쳤어도 그 수정은 남깁니다.
 
 - 값을 바꾸면 **소스에 저장**이 켜집니다. 원본을 아직 모를 때도 저장을 누르면 워크스페이스에서 규칙을 찾아 봅니다.
 - 번들 CSS만 있고 원본이 하나로 안 정해지면 미리보기만 유지되고 안내가 뜹니다.

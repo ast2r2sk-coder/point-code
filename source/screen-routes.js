@@ -146,4 +146,29 @@ function mergeCaptures(byDoc, doc, layers, now = Date.now(), ttl = 12000) {
   return [...byDoc.values()].flatMap(v=>v.layers).slice(0,40);
 }
 
-module.exports = {routesFromPaths,pushRoute,htmlToRoute,withHomeFallback,fillRoute,paramsOf,pickProject,projectFor,mergeCaptures};
+// ---- Screens found at runtime: links on the page (vanilla JS / SPA apps that have one index.html).
+const ASSET = /\.(?:png|jpe?g|gif|svg|webp|avif|ico|pdf|zip|gz|css|m?js|json|xml|txt|csv|mp4|webm|mp3|wav|woff2?|ttf|otf|map)$/i;
+/** Sanitize links reported by a page: same-origin paths only, hash kept only when it is a hash route (`#/x`, `#!/x`). */
+function cleanLinks(list, prefix = '/__point_code__/') {
+  const out = [], seen = new Set();
+  for(const l of Array.isArray(list) ? list.slice(0,100) : []) {
+    let route = typeof l?.route === 'string' ? l.route.trim().slice(0,300) : '';
+    if(!route.startsWith('/') || route.startsWith('//') || route.startsWith(prefix) || /[\s<>"]/.test(route)) continue;
+    const h = route.indexOf('#');
+    if(h >= 0 && !/^#!?\//.test(route.slice(h))) route = route.slice(0,h);
+    if(ASSET.test(route.replace(/[?#].*$/,''))) continue;
+    if(seen.has(route)) continue;
+    seen.add(route);
+    const label = typeof l?.label === 'string' ? l.label.replace(/\s+/g,' ').trim().slice(0,60) : '';
+    out.push({route, label:label || route});
+  }
+  return out;
+}
+/** Add newly seen links to the remembered list (oldest first, capped). Returns null when nothing changed. */
+function mergeLinks(known, incoming, cap = 60) {
+  const have = new Set(known.map(l=>l.route)), add = incoming.filter(l=>!have.has(l.route));
+  if(!add.length) return null;
+  return [...known, ...add].slice(0, cap);
+}
+
+module.exports = {cleanLinks,mergeLinks,routesFromPaths,pushRoute,htmlToRoute,withHomeFallback,fillRoute,paramsOf,pickProject,projectFor,mergeCaptures};

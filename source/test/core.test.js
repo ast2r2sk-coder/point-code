@@ -113,3 +113,79 @@ test('serial saves do not overwrite each other',async()=>{
   await Promise.all([edit('color:red;'),edit('padding:0;'),run(async()=>{throw Error('x');}).catch(()=>{}),edit('margin:0;')]);
   assert.equal(file,'.a{color:red;padding:0;margin:0;}');
 });
+const {revertEdit}=require('../core');
+test('undo a saved edit, even after other edits in the file',()=>{
+  const before='.a { color: red; }\n.b { margin: 0; }\n',after='.a { color: blue; }\n.b { margin: 0; }\n';
+  assert.equal(revertEdit(after,before,after),before,'file unchanged since save');
+  const edited='/* new */\n'+after.replace('margin: 0','margin: 4px');
+  assert.equal(revertEdit(edited,before,after),'/* new */\n'+before.replace('margin: 0','margin: 4px'),'other edits are kept');
+  assert.equal(revertEdit('.a { color: green; }\n',before,after),null,'the saved span itself was changed: refuse');
+  assert.equal(revertEdit(after+after,before,after),null,'ambiguous: refuse');
+  assert.equal(revertEdit('x',before,before),'x');
+});
+
+const {layoutDecls,layoutUtilities,setUtilityGroup,rewriteClassLiteral}=require('../core');
+test('layout intents follow the element and its parent', () => {
+  const block={self:{display:'block'},parent:{display:'block'}};
+  // Aligning the content of a plain block turns it into a flex box first.
+  assert.deepEqual(layoutDecls({type:'align',x:'center',y:'center'},block),{decls:[['display','flex'],['justify-content','center'],['align-items','center']],made:true});
+  // A column flex box swaps the axes.
+  assert.deepEqual(layoutDecls({type:'align',x:'end',y:'start'},{self:{display:'flex',dir:'column'}}).decls,[['justify-content','flex-start'],['align-items','flex-end']]);
+  assert.deepEqual(layoutDecls({type:'align',x:'start',y:'end'},{self:{display:'grid'}}).decls,[['justify-items','start'],['align-items','end']]);
+  assert.equal(layoutDecls({type:'flow',value:'column'},{self:{display:'grid'}}).error,'grid-flow');
+  assert.deepEqual(layoutDecls({type:'flow',value:'column'},{self:{display:'inline'}}).decls,[['display','inline-flex'],['flex-direction','column']]);
+  assert.deepEqual(layoutDecls({type:'distribute',value:'between'},{self:{display:'flex'}}).decls,[['justify-content','space-between']]);
+  assert.deepEqual(layoutDecls({type:'gap',value:'12px'},{self:{display:'flex'}}).decls,[['gap','12px']]);
+  // Placing the element itself: block parent = auto margins (and fit-content when it spans the row); no vertical placement.
+  assert.deepEqual(layoutDecls({type:'self',axis:'x',value:'center'},{self:{display:'block',fullWidth:true},parent:{display:'block'}}).decls,[['width','fit-content'],['margin-left','auto'],['margin-right','auto']]);
+  assert.deepEqual(layoutDecls({type:'self',axis:'x',value:'end'},block).decls,[['margin-left','auto'],['margin-right','0']]);
+  assert.equal(layoutDecls({type:'self',axis:'y',value:'center'},block).error,'block-y');
+  assert.equal(layoutDecls({type:'self',axis:'x',value:'center'},{self:{display:'inline-block'},parent:{display:'block'}}).error,'inline');
+  // Flex parent: cross axis = align-self, main axis = auto margins / grow.
+  assert.deepEqual(layoutDecls({type:'self',axis:'y',value:'center'},{self:{},parent:{display:'flex',dir:'row'}}).decls,[['align-self','center']]);
+  assert.deepEqual(layoutDecls({type:'self',axis:'x',value:'end'},{self:{},parent:{display:'flex',dir:'row'}}).decls,[['margin-left','auto'],['margin-right','0']]);
+  assert.deepEqual(layoutDecls({type:'self',axis:'y',value:'stretch'},{self:{},parent:{display:'flex',dir:'column'}}).decls,[['flex-grow','1']]);
+  assert.deepEqual(layoutDecls({type:'self',axis:'x',value:'center'},{self:{},parent:{display:'grid'}}).decls,[['justify-self','center']]);
+  assert.deepEqual(layoutDecls({type:'text',value:'center'},block).decls,[['text-align','center']]);
+  assert.equal(layoutDecls({type:'text',value:'x;y'},block).error,'value');
+});
+test('layout as Tailwind utilities replaces only the same group', () => {
+  const ch=layoutUtilities([['display','flex'],['justify-content','center'],['align-items','center'],['gap','12px']]);
+  assert.deepEqual(ch,{add:['flex','justify-center','items-center','gap-3'],groups:['display','justify-content','align-items','gap']});
+  assert.equal(setUtilityGroup('block items-start md:items-end gap-2 px-4 text-sm',ch),'md:items-end px-4 text-sm flex justify-center items-center gap-3');
+  assert.deepEqual(layoutUtilities([['width','fit-content'],['margin-left','auto'],['margin-right','auto']]).add,['mx-auto','w-fit']);
+  assert.deepEqual(layoutUtilities([['margin-left','auto'],['margin-right','0']]).add,['ml-auto']);
+  assert.equal(setUtilityGroup('mx-auto mt-4',layoutUtilities([['margin-left','auto'],['margin-right','0']])),'mt-4 ml-auto');
+  assert.deepEqual(layoutUtilities([['gap','var(--space-3)']]).add,['gap-[var(--space-3)]']);
+  assert.equal(layoutUtilities([['margin-left','4px'],['margin-right','auto']]),null,'no utility for an arbitrary margin pair');
+});
+test('class literal rewrite finds the string that holds the element classes', () => {
+  const src='export function Card(){\n  return <div className="card p-4 items-start">\n    <b className={cn("title", active && "on")}>Hi</b>\n  </div>;\n}';
+  const r=rewriteClassLiteral(src,2,'card',v=>setUtilityGroup(v,layoutUtilities([['display','flex'],['align-items','center']])));
+  assert.equal(r.line,2);assert.equal(r.after,'card p-4 flex items-center');
+  assert.match(r.text,/className="card p-4 flex items-center"/);assert.match(r.text,/cn\("title", active && "on"\)/);
+  assert.equal(rewriteClassLiteral(src,2,'missing',v=>v+' x'),null);
+  // Template literals with expressions are code, not a class list.
+  assert.equal(rewriteClassLiteral('<a className={`btn ${size}`}>',1,'btn',v=>v+' flex'),null);
+});
+
+const {literalKey,findLiterals,replaceLiterals,addVariable}=require('../core');
+test('hard-coded literals are found across spellings, never in token definitions', () => {
+  assert.equal(literalKey('#0A84FF'),literalKey('rgb(10, 132, 255)'));
+  assert.equal(literalKey('#abc'),'#aabbcc');assert.equal(literalKey('rgb(0 0 0 / 50%)'),'#00000080');
+  const css=':root{--brand:#0a84ff}\n.a{color:#0A84FF;border:1px solid rgb(10 132 255)}\n/* #0a84ff */\n.b{background:url("#0a84ff");padding:8px 16px;font-size:8px}\n.c{margin:8px}\n';
+  const hits=findLiterals(css,'#0a84ff');
+  assert.deepEqual(hits.map(h=>[h.line,h.prop,h.text]),[[2,'color','#0A84FF'],[2,'border','rgb(10 132 255)']],'comments, strings and --brand itself are skipped');
+  assert.deepEqual(findLiterals(css,'8px',{prop:'padding'}).map(h=>[h.line,h.prop]),[[4,'padding'],[5,'margin']],'same family only (not font-size)');
+  const r=replaceLiterals(css,'#0a84ff','var(--brand)');
+  assert.equal(r.count,2);assert.match(r.text,/\.a\{color:var\(--brand\);border:1px solid var\(--brand\)\}/);assert.match(r.text,/--brand:#0a84ff/);
+  assert.deepEqual(findLiterals('a:hover{color:red}','#0a84ff'),[]);
+  assert.deepEqual(findLiterals(css,'center'),[],'only colors and lengths');
+});
+test('a new token goes into :root, or a new :root block', () => {
+  const a=addVariable(':root{\n  --ink: #111;\n}\n.a{color:red}\n','--brand','#0a84ff');
+  assert.equal(a.selector,':root');assert.match(a.text,/--ink: #111;\n  --brand: #0a84ff;\n\}/);
+  const b=addVariable('.a{color:red}\n','--brand','#0a84ff');
+  assert.equal(b.created,true);assert.match(b.text,/^:root \{\n  --brand: #0a84ff;\n\}\n\n\.a/);
+  assert.equal(addVariable(':root{--brand:#000}','--brand','#fff').error,'exists');
+});

@@ -9,11 +9,29 @@
   const host=document.createElement('div');host.setAttribute('data-point-code-ui','');
   host.style.cssText='position:fixed;inset:0;z-index:2147483647;pointer-events:none';
   const shadow=host.attachShadow({mode:'open'});
-  shadow.innerHTML=`<style>*{box-sizing:border-box}.box{display:none;position:fixed;border:2px solid #8b5cf6;background:#8b5cf620;pointer-events:none}.label{position:fixed;display:none;background:#6d28d9;color:white;font:12px system-ui;padding:5px 8px;max-width:90vw;white-space:nowrap;overflow:hidden}.bar{position:fixed;bottom:16px;right:16px;display:flex;gap:8px;align-items:center;background:#17151f;color:white;padding:8px;border:1px solid #65577e;border-radius:12px;box-shadow:0 4px 24px #0005;font:12px system-ui;pointer-events:auto}button{border:0;border-radius:7px;padding:9px 12px;background:#8b5cf6;color:white;cursor:pointer}span{max-width:220px}</style><div class="box"></div><div class="label"></div><div class="bar"><span>Point Code</span><button>요소 선택</button></div>`;
+  // The picker lives inside the user's page, where VS Code theme variables do not exist: its look is defined here, once.
+  const THEME={
+    accent:'#0a84ff',onAccent:'#fff',accentFill:'rgb(10 132 255 / .12)',inherit:'#ff9f0a',affected:'#64d2ff',
+    glass:'rgb(28 28 30 / .72)',glassBorder:'rgb(255 255 255 / .14)',glassBlur:'saturate(180%) blur(20px)',
+    label:'#f5f5f7',fill:'rgb(255 255 255 / .12)',fillHover:'rgb(255 255 255 / .2)',shadow:'0 8px 32px rgb(0 0 0 / .35)',
+    font:'500 12px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif',radius:'999px'
+  };
+  shadow.innerHTML=`<style>*{box-sizing:border-box}
+.box{display:none;position:fixed;border:2px solid ${THEME.accent};border-radius:3px;background:${THEME.accentFill};pointer-events:none}
+.label{position:fixed;display:none;max-width:90vw;padding:4px 8px;border-radius:6px;background:${THEME.accent};color:${THEME.onAccent};font:${THEME.font};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:${THEME.shadow}}
+.bar{position:fixed;bottom:16px;right:16px;display:flex;gap:6px;align-items:center;padding:6px 6px 6px 14px;border:.5px solid ${THEME.glassBorder};border-radius:${THEME.radius};
+  background:${THEME.glass};-webkit-backdrop-filter:${THEME.glassBlur};backdrop-filter:${THEME.glassBlur};color:${THEME.label};font:${THEME.font};box-shadow:${THEME.shadow};pointer-events:auto}
+span{max-width:220px;opacity:.85}
+button{height:28px;padding:0 14px;border:0;border-radius:${THEME.radius};background:${THEME.fill};color:${THEME.label};font:${THEME.font};cursor:pointer;transition:background .16s}
+button:hover{background:${THEME.fillHover}}
+button.pick{background:${THEME.accent};color:${THEME.onAccent}}
+button:focus-visible{outline:2px solid ${THEME.accent};outline-offset:2px}
+</style><div class="box"></div><div class="label"></div><div class="bar"><span>Point Code</span><button class="snap" title="지금 보이는 화면을 화면 그리드에 고정">화면 담기</button><button class="pick">요소 선택</button></div>`;
   if(!BOARD)document.documentElement.append(host);
-  const box=shadow.querySelector('.box'),label=shadow.querySelector('.label'),button=shadow.querySelector('button'),status=shadow.querySelector('span');
+  const box=shadow.querySelector('.box'),label=shadow.querySelector('.label'),button=shadow.querySelector('.pick'),status=shadow.querySelector('span');
   function toggle(v){active=v;button.textContent=v?'선택 중 · Esc':'요소 선택';if(!v){box.style.display=label.style.display='none';last=null;}}
   button.onclick=()=>toggle(!active);
+  shadow.querySelector('.snap').onclick=()=>void snapshot();
   function isUI(e){return e.composedPath().includes(host);}
   function move(e){if(!active||isUI(e))return;const el=e.composedPath()[0];if(!(el instanceof Element))return;last=el;const r=el.getBoundingClientRect();Object.assign(box.style,{display:'block',left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});label.textContent=el.tagName.toLowerCase()+(el.id?'#'+el.id:'')+' '+Array.from(el.classList).slice(0,4).join('.');Object.assign(label.style,{display:'block',left:Math.max(0,r.left)+'px',top:Math.max(0,r.top-28)+'px'});}
   const FRAME=/((?:https?|webpack-internal|file):\/\/\/?\S+?):(\d+):(\d+)\)?\s*$/;
@@ -176,6 +194,37 @@
   const WEIGHT_SCALE=[['Thin','100','font-thin'],['Extra Light','200','font-extralight'],['Light','300','font-light'],['Normal','400','font-normal'],['Medium','500','font-medium'],['Semibold','600','font-semibold'],['Bold','700','font-bold'],['Extra Bold','800','font-extrabold'],['Black','900','font-black']].map(([label,value,util])=>({label,value,util}));
   const FONT_SCALE=[['Sans','sans-serif','font-sans'],['Serif','serif','font-serif'],['Mono','monospace','font-mono']].map(([label,value,util])=>({label,value,util}));
   const COMPUTED=['color','background-color','font-family','font-size','font-weight','line-height','letter-spacing','text-align','margin','padding','border','border-radius','width','height','display','gap','box-shadow','opacity'];
+  // Where the element sits in its parent's content box (start / center / end / stretch), per axis.
+  function placement(a,b,size,inner){const s=a<2&&b<2?'stretch':Math.abs(a-b)<2?'center':a<2?'start':b<2?'end':'';return size>=inner-1&&s!=='stretch'?'stretch':s;}
+  function layoutOf(el,cs){
+    const p=el.parentElement,ps=p&&getComputedStyle(p),r=el.getBoundingClientRect();
+    const self={display:cs.display,dir:cs.flexDirection,wrap:cs.flexWrap,justify:cs.justifyContent,align:cs.alignItems,justifyItems:cs.justifyItems,gap:cs.columnGap,textAlign:cs.textAlign,alignSelf:cs.alignSelf,justifySelf:cs.justifySelf,kids:el.children.length};
+    if(!p||p===document.documentElement)return {self,parent:null};
+    const pr=p.getBoundingClientRect(),n=k=>parseFloat(ps[k])||0;
+    const left=pr.left+n('borderLeftWidth')+n('paddingLeft'),right=pr.right-n('borderRightWidth')-n('paddingRight');
+    const top=pr.top+n('borderTopWidth')+n('paddingTop'),bottom=pr.bottom-n('borderBottomWidth')-n('paddingBottom');
+    self.fullWidth=Math.abs(r.width-(right-left))<2;
+    self.placeX=placement(r.left-left,right-r.right,r.width,right-left);
+    self.placeY=placement(r.top-top,bottom-r.bottom,r.height,bottom-top);
+    return {self,parent:{tag:describe(p),display:ps.display,dir:ps.flexDirection}};
+  }
+  // 수정 지도: elements on this page that share the pick's class list, and look-alikes (same tag and key computed styles)
+  // that are styled from somewhere else — the same design decision made in several places.
+  const LOOK=['color','background-color','font-size','font-weight','border-top-left-radius','padding-top','padding-left','border-top-width','border-top-color'];
+  let lastAlike={same:[],groups:[]};
+  function alikeOf(el){
+    const sig=s=>LOOK.map(k=>s.getPropertyValue(k)).join('|'),me=sig(getComputedStyle(el)),cls=[...el.classList].sort().join(' ');
+    const same=[],groups=new Map();
+    for(const n of [...document.body.getElementsByTagName(el.tagName)].slice(0,400)){
+      if(n===el||host.contains(n))continue;const r=n.getBoundingClientRect();if(!r.width||!r.height)continue;
+      if(cls&&[...n.classList].sort().join(' ')===cls){same.push(n);continue;}
+      if(sig(getComputedStyle(n))!==me)continue;
+      const label=n.classList.length?'.'+[...n.classList].slice(0,3).join('.'):n.getAttribute('style')?'style 속성':'<'+n.tagName.toLowerCase()+'> (클래스 없음)';
+      if(!groups.has(label))groups.set(label,[]);groups.get(label).push(n);
+    }
+    lastAlike={same,groups:[...groups.values()].slice(0,8)};
+    return {same:same.length,sameSelector:cls?'.'+[...el.classList].map(c=>CSS.escape(c)).join('.'):null,groups:[...groups].slice(0,8).map(([label,list])=>({label,count:list.length}))};
+  }
   function inspect(el,text){
     const components=(Object.keys(el).some(k=>k.startsWith('__reactFiber$'))?reactChain(el,text):[]).concat(vueChain(el,text),svelteChain(el));
     const ancestors=[];for(let n=el.parentElement;n&&ancestors.length<8;n=n.parentElement)ancestors.push(n);
@@ -190,12 +239,12 @@
       for(const [h,props] of by)inherited.push({from:describe(n),fromClasses:Array.from(n.classList).slice(0,50),fromSource:source(n),kids:n.querySelectorAll('*').length,...ruleOut(h),decls:h.decls.filter(d=>props.some(p=>p===d.p||p.startsWith(d.p+'-')||d.p==='font'))});});
     const cs=getComputedStyle(el);
     const vars=[...new Set(own.flatMap(h=>h.decls.flatMap(d=>[...d.v.matchAll(/var\(\s*(--[\w-]+)/g)].map(m=>m[1]))))].slice(0,30).map(v=>[v,cs.getPropertyValue(v).trim()]);
-    return {hovered:el.matches(':hover'),components,rules:own.slice(0,60).map(ruleOut),states:states.slice(0,30).map(ruleOut),inherited:inherited.slice(0,12),computed:COMPUTED.map(p=>[p,cs.getPropertyValue(p)]).filter(([,v])=>v),vars,tokens:designTokens(),scales:{weight:WEIGHT_SCALE,font:FONT_SCALE}};
+    return {hovered:el.matches(':hover'),components,rules:own.slice(0,60).map(ruleOut),states:states.slice(0,30).map(ruleOut),inherited:inherited.slice(0,12),computed:COMPUTED.map(p=>[p,cs.getPropertyValue(p)]).filter(([,v])=>v),vars,tokens:designTokens(),scales:{weight:WEIGHT_SCALE,font:FONT_SCALE},layout:layoutOf(el,cs),alike:(()=>{try{return alikeOf(el);}catch{return null;}})()};
   }
 
   // Live preview from the inspector: CSS overlay, root token overrides, text, and outlines of affected elements.
   const liveStyle=document.createElement('style');liveStyle.setAttribute('data-point-code-live','');
-  const liveMark=document.createElement('style');liveMark.setAttribute('data-point-code-live','');liveMark.textContent='[data-point-picked]{outline:2px solid #8b5cf6;outline-offset:1px}[data-point-from]{outline:2px dashed #f59e0b;outline-offset:2px}[data-point-affected]{outline:2px dashed #a78bfa;outline-offset:2px}';
+  const liveMark=document.createElement('style');liveMark.setAttribute('data-point-code-live','');liveMark.textContent=`[data-point-picked]{outline:2px solid ${THEME.accent};outline-offset:1px}[data-point-from]{outline:2px dashed ${THEME.inherit};outline-offset:2px}[data-point-affected]{outline:2px dashed ${THEME.affected};outline-offset:2px}`;
   document.documentElement.append(liveStyle,liveMark);
   // Token previews per channel: the Design System board and the inspector each own theirs, so one never erases the other.
   let picked=null,origText=null,es,esTimer,poll;const tokenSets={palette:new Map(),inspector:new Map()},applied=new Set();
@@ -217,6 +266,26 @@
     if(msg.pullTokens){if(!BOARD)void postPalette();return;}
     if(msg.pullScreens){if(!BOARD)void postScreens();return;}
     if(msg.focus){if(!BOARD)focusLayer(msg.focus);return;}
+    if(msg.snapshot){if(!BOARD&&msg.snapshot.doc===DOC)void snapshot();return;}
+    if(msg.flash){
+      if(BOARD||msg.flash.doc!==DOC)return;
+      let list=[];
+      if(Number.isInteger(msg.flash.group))list=msg.flash.group<0?lastAlike.same:(lastAlike.groups[msg.flash.group]||[]);
+      else if(typeof msg.flash.selector==='string'){try{list=[...document.querySelectorAll(msg.flash.selector.slice(0,300))].filter(n=>!host.contains(n));}catch{}}
+      list=list.filter(n=>n.isConnected).slice(0,200);
+      if(!list.length)return;
+      list[0].scrollIntoView({block:'center',behavior:'smooth'});
+      for(const n of list)n.setAttribute('data-point-affected','');
+      setTimeout(()=>{for(const n of list)n.removeAttribute('data-point-affected');},2500);
+      return;
+    }
+    if(msg.relative){
+      if(BOARD||msg.relative.doc!==DOC||!picked?.isConnected)return;
+      const n=msg.relative.dir==='parent'?(picked.parentElement!==document.documentElement&&picked.parentElement)
+        :[...picked.children].find(c=>{const r=c.getBoundingClientRect();return r.width>0&&r.height>0;})||picked.firstElementChild;
+      if(n)void choose(n);
+      return;
+    }
     const channel=msg.channel==='palette'?'palette':'inspector';
     if(msg.reset){resetLive();return;}
     if(Array.isArray(msg.tokens)){const set=tokenSets[channel];set.clear();for(const t of msg.tokens){if(!t||!okProp(t.n)||!t.n.startsWith('--')||!okVal(t.v))continue;set.set(t.n,t.v);}paintTokens();}
@@ -240,16 +309,80 @@
     document.querySelectorAll('[role="drawer"],[data-state="open"][class*="drawer"],aside[data-state="open"]').forEach(el=>add(el,'drawer','드로어'));
     return out;
   }
+  // Same-site links on the page: for apps with one index.html these are the other screens (`/about.html`, `#/settings`).
+  function collectLinks(){
+    const out=[],seen=new Set();
+    const add=(u,label)=>{if(u.origin!==location.origin||out.length>=60)return;const route=u.pathname+u.search+(/^#!?\//.test(u.hash)?u.hash:'');if(seen.has(route))return;seen.add(route);out.push({route,label});};
+    for(const a of document.querySelectorAll('a[href]')){
+      if(host.contains(a)||a.hasAttribute('download'))continue;
+      let u;try{u=new URL(a.getAttribute('href'),document.baseURI);}catch{continue;}
+      add(u,(a.getAttribute('aria-label')||a.textContent||'').trim().replace(/\s+/g,' ').slice(0,60));
+    }
+    // The screen the user navigated to by script (hash router) counts too.
+    if(/^#!?\//.test(location.hash))add(new URL(location.href),document.title.slice(0,60));
+    return out;
+  }
+  // ---- "화면 담기": the DOM as it is right now (open modal, active tab, filled form), scripts removed so it stays in this state.
+  // Styles stay live: linked stylesheets load normally and the board still forwards token/CSS previews into it.
+  const snapshotUrl=endpoint.replace('/select?','/snapshot?');
+  function snapshotLabel(){
+    const vis=n=>n&&shown(n);
+    const dialog=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog[open]')].find(vis);
+    const head=[...(dialog||document).querySelectorAll('h1,h2,h3,[role="heading"]')].find(vis);
+    const t=(dialog?.getAttribute('aria-label')||head?.textContent||document.title||'').trim().replace(/\s+/g,' ').slice(0,50);
+    return (t?t+' · ':'')+(location.pathname+location.hash).slice(0,40);
+  }
+  function snapshotHtml(){
+    const clone=document.documentElement.cloneNode(true);
+    const pairs=sel=>{const a=document.querySelectorAll(sel),b=clone.querySelectorAll(sel);return [...a].map((n,i)=>[n,b[i]]).filter(([,c])=>c);};
+    // Form state lives in properties, not attributes.
+    for(const [el,c] of pairs('input,textarea,select')){
+      if(el.tagName==='TEXTAREA')c.textContent=el.value;
+      else if(el.tagName==='SELECT')[...c.options].forEach((o,j)=>{if(el.options[j]?.selected)o.setAttribute('selected','');else o.removeAttribute('selected');});
+      else if(el.type==='checkbox'||el.type==='radio'){if(el.checked)c.setAttribute('checked','');else c.removeAttribute('checked');}
+      else if(el.type==='password'||el.type==='file')c.removeAttribute('value');
+      else c.setAttribute('value',el.value);
+    }
+    for(const [el,c] of pairs('canvas')){try{const img=document.createElement('img');img.src=el.toDataURL();img.width=el.width;img.height=el.height;img.style.cssText=el.style.cssText;img.className=el.className;c.replaceWith(img);}catch{}}
+    // Rules added through CSSOM (insertRule / CSS-in-JS) are not in the <style> text.
+    for(const [el,c] of pairs('style')){try{if(el.sheet&&!el.textContent.trim())c.textContent=[...el.sheet.cssRules].map(r=>r.cssText).join('\n');}catch{}}
+    const head=clone.querySelector('head')||clone.insertBefore(document.createElement('head'),clone.firstChild);
+    try{for(const sh of document.adoptedStyleSheets||[]){const st=document.createElement('style');st.textContent=[...sh.cssRules].map(r=>r.cssText).join('\n');head.append(st);}}catch{}
+    clone.querySelectorAll('script,[data-point-code-ui],style[data-point-code-live],link[rel="modulepreload"],link[as="script"],base').forEach(n=>n.remove());
+    for(const n of clone.querySelectorAll('*')){
+      for(const a of [...n.attributes])if(/^on/i.test(a.name)||/^data-point-(picked|affected|from)$/.test(a.name)||(/^(href|src|action|formaction)$/i.test(a.name)&&/^\s*javascript:/i.test(a.value)))n.removeAttribute(a.name);
+    }
+    // Previews are not part of the app: drop token overrides set on <html>; the board re-applies previews live.
+    for(const t of applied)clone.style.removeProperty(t);
+    if(!clone.getAttribute('style'))clone.removeAttribute('style');
+    const base=document.createElement('base');base.href=document.baseURI;head.insertBefore(base,head.firstChild);
+    const meta=document.createElement('meta');meta.name='point-code-snapshot';meta.content=JSON.stringify({scroll:Math.round(scrollY),at:Date.now()});head.append(meta);
+    return '<!doctype html>\n'+clone.outerHTML;
+  }
+  async function snapshot(){
+    if(BOARD)return;
+    status.textContent='화면 담는 중…';
+    try{
+      const html=snapshotHtml();
+      if(html.length>8e6)throw Error('too big');
+      const r=await fetch(snapshotUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({html,label:snapshotLabel(),route:location.pathname+location.search+location.hash}),signal:AbortSignal.timeout(15000)});
+      if(!r.ok)throw Error();
+      status.textContent='화면 그리드에 담았습니다';
+    }catch(err){status.textContent=String(err?.message)==='too big'?'화면이 너무 커서 담지 못했습니다':'화면 담기 실패 · Point Code: 시작 실행 확인';}
+  }
+  // A captured screen restores where it was scrolled to.
+  try{const m=document.querySelector('meta[name="point-code-snapshot"]');const y=m&&JSON.parse(m.content).scroll;if(y)addEventListener('load',()=>scrollTo(0,y),{once:true});}catch{}
   const paletteUrl=endpoint.replace('/select?','/palette?');
   const screensUrl=endpoint.replace('/select?','/screens?');
   async function postPalette(){try{await fetch(paletteUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({tokens:designTokens()}),signal:AbortSignal.timeout(4000)});}catch{}}
   // Reports only when the open layers change (the host also ignores repeats), tagged with this document so pages do not overwrite each other.
   let lastLayers='';
-  async function postScreens(force){const layers=captureLayers(),key=JSON.stringify(layers);if(!force&&key===lastLayers)return;lastLayers=key;try{await fetch(screensUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({doc:DOC,layers,route:location.pathname+location.search+location.hash}),signal:AbortSignal.timeout(4000)});}catch{}}
+  async function postScreens(force){const layers=captureLayers(),links=collectLinks(),key=JSON.stringify([layers,links]);if(!force&&key===lastLayers)return;lastLayers=key;try{await fetch(screensUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({doc:DOC,layers,links,route:location.pathname+location.search+location.hash}),signal:AbortSignal.timeout(4000)});}catch{}}
   function connectLive(){try{es=new EventSource(endpoint.replace('/select?','/live?'));}catch{return;}es.onmessage=e=>{try{applyLive(JSON.parse(e.data));}catch{}};es.onerror=()=>{es.close();esTimer=setTimeout(connectLive,2000);};es.onopen=()=>{void postPalette();void postScreens(true);};}
-  function fromBoard(e){if(e.source===window.parent&&e.data&&e.data.__pointCode==='live')applyLive(e.data.payload);}
-  if(BOARD)window.addEventListener('message',fromBoard);
-  else{
+  // Messages from the embedding webview: live previews (Screens board) or "화면 담기" (preview toolbar).
+  function fromBoard(e){if(e.source!==window.parent||!e.data)return;if(BOARD&&e.data.__pointCode==='live')applyLive(e.data.payload);if(!BOARD&&e.data.__pointCode==='snapshot')void snapshot();}
+  if(window.parent!==window)window.addEventListener('message',fromBoard);
+  if(!BOARD){
     connectLive();
     setTimeout(()=>{void postPalette();void postScreens(true);},800);
     // Keep-alive every 4s (captures expire on the host after 12s); otherwise only changes are sent.
@@ -258,10 +391,13 @@
   }
 
   async function click(e){if(!active||isUI(e))return;e.preventDefault();e.stopImmediatePropagation();const el=e.composedPath()[0];if(!(el instanceof Element))return;
+    toggle(false);return choose(el);
+  }
+  async function choose(el){
     resetLive();clearAttr('data-point-picked');picked=el;el.setAttribute('data-point-picked','');
-    const payload={tag:el.tagName.toLowerCase(),id:el.id||'',classes:Array.from(el.classList).slice(0,50),text:(el.textContent||'').trim().replace(/\s+/g,' ').slice(0,160),ownText:ownText(el),source:source(el)};
+    const payload={doc:DOC,tag:el.tagName.toLowerCase(),id:el.id||'',classes:Array.from(el.classList).slice(0,50),text:(el.textContent||'').trim().replace(/\s+/g,' ').slice(0,160),ownText:ownText(el),source:source(el)};
     try{payload.inspect=inspect(el,(el.textContent||'').replace(/\s+/g,' '));}catch(err){payload.inspect={error:String(err&&err.message||err)};}
-    toggle(false);status.textContent='소스 연결 중…';
+    status.textContent='소스 연결 중…';
     try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload),signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();status.textContent='선택 전달 완료';}catch{status.textContent='연결 실패 · Point Code: 시작 실행 확인';}
   }
   // Menus and dropdowns often react to pointerdown/mousedown, before click is dispatched.
